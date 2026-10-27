@@ -4,14 +4,52 @@ vi.mock('./config.js', () => ({ config: {
   APPLICATIONS_PORTAL_URL: 'https://portal.school.test',
   PLATFORM_API_KEY: 'test-key-not-a-production-credential',
 } }));
-import { findUsers, getUser, platform, publicConfig } from './platform.js';
+import { findUsers, getUser, platform, publicConfig, platformImage, navigationFor } from './platform.js';
 
 afterEach(() => vi.unstubAllGlobals());
 describe('central platform consumer', () => {
+  it('rewrites central asset URLs to same-origin image endpoints while preserving versions', async () => {
+    const config = {
+      branding: {
+        appName: 'Portal', organisationName: 'School', primaryColor: '#123456', backgroundColor: '', textColor: '',
+        accentColor: '', logoUrl: 'https://portal.school.test/api/branding/assets/logo?v=123',
+        iconUrl: 'https://portal.school.test/api/branding/assets/icon', backgroundUrl: null, footerLogoUrl: null, websiteUrl: null,
+      },
+      profileUrl: 'https://portal.school.test/profile',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(config))));
+    expect((await publicConfig()).branding).toEqual({ ...config.branding, logoUrl: '/api/branding/assets/logo?v=123', iconUrl: '/api/branding/assets/icon' });
+  });
+  it('transfers central image bytes server-side without forwarding browser cookies or resource policy', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('image', { headers: { 'content-type': 'image/png', 'cross-origin-resource-policy': 'same-origin' } }));
+    vi.stubGlobal('fetch', fetch);
+    expect(await platformImage('/learning/assets/logo')).toEqual({ data: Buffer.from('image'), contentType: 'image/png' });
+    expect(fetch).toHaveBeenCalledWith('https://portal.school.test/api/platform/v1/learning/assets/logo', expect.objectContaining({
+      redirect: 'error', headers: { 'x-platform-key': 'test-key-not-a-production-credential' },
+    }));
+  });
+  it('rejects invalid image responses and central outages rather than serving error HTML as an image', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response('html', { headers: { 'content-type': 'text/html' } }))
+      .mockResolvedValueOnce(new Response('', { status: 404 }))
+      .mockResolvedValueOnce(new Response('', { status: 500 }))
+      .mockRejectedValueOnce(new Error('Offline'));
+    vi.stubGlobal('fetch', fetch);
+    await expect(platformImage('/learning/assets/logo')).rejects.toMatchObject({ status: 503 });
+    await expect(platformImage('/learning/assets/logo')).rejects.toMatchObject({ status: 404 });
+    await expect(platformImage('/learning/assets/logo')).rejects.toMatchObject({ status: 503 });
+    await expect(platformImage('/learning/assets/logo')).rejects.toMatchObject({ status: 503 });
+  });
+  it('bounds image transfers and rejects malformed central menus', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array(10 * 1024 * 1024 + 1), { headers: { 'content-type': 'image/png' } })));
+    await expect(platformImage('/learning/assets/logo')).rejects.toMatchObject({ status: 503 });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [{ path: '//evil.test' }] }))));
+    await expect(navigationFor(42)).rejects.toMatchObject({ status: 503 });
+  });
   it('accepts central branding when optional website and assets are unset', async () => {
     const config = {
       branding: {
-        organisationName: 'School', primaryColor: '#123456', backgroundColor: '', textColor: '',
+        appName: 'Applications Portal', organisationName: 'School', primaryColor: '#123456', backgroundColor: '', textColor: '',
         accentColor: '', logoUrl: null, iconUrl: null, backgroundUrl: null, footerLogoUrl: null, websiteUrl: null,
       },
       profileUrl: 'https://portal.school.test/profile',

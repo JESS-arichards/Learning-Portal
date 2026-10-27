@@ -8,7 +8,7 @@ vi.mock('./config.js', () => ({ config: {
   SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: false,
 } }));
 vi.mock('./platform.js', () => ({
-  platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(),
+  platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(), platformImage: vi.fn(), navigationFor: vi.fn(),
   parsePlatform: (schema: { parse: (data: unknown) => unknown }, data: unknown) => schema.parse(data),
 }));
 vi.mock('./repository.js', () => ({ snapshot: vi.fn(), save: vi.fn(), remove: vi.fn(), saveStructure: vi.fn() }));
@@ -16,7 +16,7 @@ vi.mock('./db.js', () => ({ transaction: vi.fn(async (work: (tx: object) => Prom
 vi.mock('./storage.js', () => ({ putFile: vi.fn(), readFileContent: vi.fn(), deleteFile: vi.fn(), checkStorage: vi.fn() }));
 
 import { createApp } from './app.js';
-import { platform, getUser, findUsers } from './platform.js';
+import { platform, getUser, findUsers, platformImage, navigationFor } from './platform.js';
 import { snapshot, save, saveStructure, remove } from './repository.js';
 import { readFileContent, putFile } from './storage.js';
 import { HttpError } from './errors.js';
@@ -82,6 +82,31 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('serves central images same-origin and exposes only the signed-in user avatar', async () => {
+    vi.mocked(platformImage).mockResolvedValue({ data: Buffer.from('image'), contentType: 'image/png' });
+    const logo = await call('/branding/assets/logo', 'GET', undefined, false);
+    expect(logo.status).toBe(200);
+    expect(logo.headers.get('content-type')).toContain('image/png');
+    expect(logo.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+    expect(logo.headers.get('cache-control')).toBe('no-store');
+    expect(platformImage).toHaveBeenCalledWith('/learning/assets/logo');
+    expect((await call('/branding/assets/not-a-branding-asset')).status).toBe(400);
+    expect((await call('/me/avatar', 'GET', undefined, false)).status).toBe(401);
+    const avatar = await call('/me/avatar?id=999');
+    expect(avatar.status).toBe(200);
+    expect(platformImage).toHaveBeenLastCalledWith('/learning/users/10/avatar');
+    vi.mocked(platformImage).mockRejectedValueOnce(new HttpError(404, 'Image not found.'));
+    expect((await call('/me/avatar')).status).toBe(404);
+  });
+  it('loads the central menu only for the authenticated identity and fails explicitly on central outage', async () => {
+    vi.mocked(navigationFor).mockResolvedValue({ items: [], portalUrl: 'http://localhost:8080', learningUrl: 'http://localhost:5174', adminUrl: null, parkingReleaseUrl: null });
+    expect((await call('/navigation', 'GET', undefined, false)).status).toBe(401);
+    expect(navigationFor).not.toHaveBeenCalled();
+    expect((await call('/navigation?id=999')).status).toBe(200);
+    expect(navigationFor).toHaveBeenCalledWith(10);
+    vi.mocked(navigationFor).mockRejectedValueOnce(new HttpError(503, 'Central unavailable.'));
+    expect((await call('/navigation')).status).toBe(503);
+  });
   it('uses an independent HttpOnly SameSite cookie and requires sign-in', async () => {
     expect(cookie).toContain('learning_session=');
     expect((await call('/learning', 'GET', undefined, false)).status).toBe(401);

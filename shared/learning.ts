@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PortalMenuItem } from './portalMenu.js';
 
 export const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 export function normaliseEmail(email: string): string { return email.trim().toLowerCase(); }
@@ -19,10 +20,13 @@ export const userSchema = personSchema.extend({
   sessionVersion: z.number().int().nonnegative(),
   roles: z.array(z.string()),
   studentEmails: z.array(emailSchema),
+  hasAvatar: z.boolean().optional(),
+  avatarVersion: z.string().nullable().optional(),
 });
 export type User = z.infer<typeof userSchema>;
 export const publicConfigSchema = z.object({
   branding: z.object({
+    appName: z.string(),
     organisationName: z.string(), primaryColor: z.string(),
     backgroundColor: z.string(), textColor: z.string(), logoUrl: z.string().nullable(),
     accentColor: z.string(), iconUrl: z.string().nullable(), backgroundUrl: z.string().nullable(),
@@ -31,6 +35,25 @@ export const publicConfigSchema = z.object({
   profileUrl: z.string().nullable(),
 });
 export type PublicConfig = z.infer<typeof publicConfigSchema>;
+const menuLinkSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  icon: z.enum(['home', 'streaming', 'learning', 'parking', 'trips', 'absence', 'tasks', 'timetable', 'classes', 'admin']),
+  application: z.enum(['apps', 'learn']),
+  path: z.enum(['/', '/streaming', '/parking', '/trips', '/staff-absence', '/tasks', '/classes', '/admin']),
+});
+const menuItemsSchema: z.ZodType<PortalMenuItem[]> = z.array(z.union([
+  menuLinkSchema,
+  z.object({ id: z.string(), label: z.string(), icon: menuLinkSchema.shape.icon, children: z.array(menuLinkSchema).min(1) }),
+]));
+export const navigationSchema = z.object({
+  items: menuItemsSchema,
+  portalUrl: z.url(),
+  learningUrl: z.url(),
+  adminUrl: z.url().nullable(),
+  parkingReleaseUrl: z.url().nullable(),
+});
+export type PortalNavigation = z.infer<typeof navigationSchema>;
 export const classSchema = z.object({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(200),

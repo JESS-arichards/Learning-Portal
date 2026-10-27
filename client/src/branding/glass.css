@@ -1,0 +1,44 @@
+:root {
+  --brand-deep: color-mix(in srgb, var(--brand), #111827 82%);
+  --surface-canvas: rgba(0, 10, 35, 0.28);
+  --surface-1: rgba(255, 255, 255, 0.06);
+  --surface-2: rgba(255, 255, 255, 0.12);
+  --surface-hover: rgba(255, 255, 255, 0.2);
+  --border-subtle: rgba(214, 226, 242, 0.16);
+  --border-strong: rgba(214, 226, 242, 0.28);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.22), 0 12px 28px rgba(0, 0, 0, 0.14);
+  --focus-ring: #ffffff;
+  --focus-halo: #111827;
+  --app-bg-color: var(--brand);
+  --app-bg-deep: color-mix(in oklab, var(--app-bg-color), black 35%);
+  --app-bg-soft: color-mix(in oklab, var(--app-bg-color), white 22%);
+  --app-bg-glow: color-mix(in oklab, var(--app-bg-color), #4cc3ff 55%);
+  --text: var(--branding-text, #f3f5f7);
+  --text-muted: var(--branding-text, #c3ccd8);
+  --text-faint: var(--branding-text, #a8b5c5);
+  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05));
+  --glass-bg-strong: linear-gradient(135deg, color-mix(in srgb, var(--brand-deep), transparent 12%), color-mix(in srgb, var(--brand-deep), transparent 22%));
+  --glass-border: rgba(255, 255, 255, 0.22);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.28), inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 10px 40px rgba(0, 8, 30, 0.35);
+  --blur: blur(22px) saturate(170%);
+}
+.fluid-bg {
+  position: fixed; inset: 0; z-index: -1; overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 10% 0%, var(--app-bg-soft) 0%, transparent 55%),
+    radial-gradient(100% 80% at 100% 100%, color-mix(in oklab, var(--app-bg-color), #3a7bd5 35%) 0%, transparent 60%),
+    linear-gradient(160deg, var(--app-bg-color) 0%, var(--app-bg-deep) 100%);
+}
+.fluid-bg::after {
+  content: ''; position: absolute; inset: 0; background-image: var(--app-bg-image);
+  background-size: cover; background-position: center; opacity: .35; mix-blend-mode: soft-light;
+}
+.fluid-bg .orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .55; will-change: transform; }
+.fluid-bg .orb-1 { width: 46vmax; height: 46vmax; left: -12vmax; top: -10vmax; background: var(--app-bg-glow); animation: drift-1 26s ease-in-out infinite alternate; }
+.fluid-bg .orb-2 { width: 38vmax; height: 38vmax; right: -10vmax; top: 20vh; background: color-mix(in oklab, var(--app-bg-color), #7b5cff 55%); animation: drift-2 32s ease-in-out infinite alternate; }
+.fluid-bg .orb-3 { width: 34vmax; height: 34vmax; left: 25vw; bottom: -16vmax; background: color-mix(in oklab, var(--app-bg-color), #00d1c1 45%); animation: drift-3 28s ease-in-out infinite alternate; }
+@keyframes drift-1 { to { transform: translate(18vw, 14vh) scale(1.15); } }
+@keyframes drift-2 { to { transform: translate(-16vw, -10vh) scale(.9); } }
+@keyframes drift-3 { to { transform: translate(-10vw, -18vh) scale(1.2); } }
+@media (prefers-reduced-motion: reduce) { .fluid-bg .orb { animation: none; } }

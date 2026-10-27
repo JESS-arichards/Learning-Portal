@@ -315,6 +315,9 @@ The consumer uses:
 | Central platform endpoint | Purpose |
 | --- | --- |
 | `GET /api/platform/v1/learning/config` | Central branding and central profile URL; no Learning identity-provider configuration |
+| `GET /api/platform/v1/learning/navigation/:id` | Central, role-filtered Portal feature links, expandable Learning group and account destinations |
+| `GET /api/platform/v1/learning/assets/:asset` | Central branding image bytes for same-origin proxying |
+| `GET /api/platform/v1/learning/users/:id/avatar` | Active central user's avatar bytes; Learning exposes only the current authenticated user's avatar |
 | `POST /api/platform/v1/learning/sso/start` | Register state/PKCE challenge and get the Portal authorization URL |
 | `POST /api/platform/v1/learning/sso/redeem` | Redeem the one-use code with its PKCE verifier for a central profile |
 | `GET /api/platform/v1/users/:id` | Live account status, session version, roles and parent links |
@@ -335,9 +338,34 @@ Legacy Learning `/api/auth/entra` and `/api/auth/otp/*` endpoints return 410.
 
 Learning has **no branding editor, branding database or per-app theme configuration**.
 It reads **Applications Portal > Admin > Branding** at runtime for the organisation,
-primary/background/accent/text colors, logo, icon, background image, footer logo and
+primary/background/text colors, logo, icon, background image, footer logo and
 website link. Clearing a central asset or text override clears it in Learning too.
-Branding reloads on page load, learning-data refresh and browser focus.
+Branding, navigation and avatar metadata reload on page load, learning-data refresh
+and browser focus. Accent contrast is derived from the primary colour using the
+same helper as Applications Portal.
+
+Branding asset URLs are rewritten to `/api/branding/assets/:asset` on Learning,
+and avatars use the protected `/api/me/avatar` endpoint. Only image bytes are
+proxied from the central service; no platform key, central session cookie or Blob
+credential reaches the browser. Versioned asset URLs refresh after central updates.
+Missing avatars use the Portal's first/last-name initials; failed image loads are
+reported rather than introducing a different local logo or branding configuration.
+
+The header now uses the central application name/logo, avatar and account destinations.
+Above 1,400px, the same collapsible **Applications Portal left sidebar** appears,
+with **Learning Portal** expanded to show **My timetable**, **My classes** for staff/admins
+and **Learning Portal admin** for **Full Admin / Learn Admin only**. Other application
+admin roles do not grant Learning administration. Smaller screens use the shared
+hamburger menu. Learn links are no longer displayed across the top bar.
+Home, Streaming and eligible Portal features link back to the matching central
+environment; Learning routes remain local. The central menu is authoritative,
+including trip attachment, staff absence and task-role eligibility.
+
+The Portal's checked-in `glass.css` is shared, not a separately tuned Learning palette.
+It supplies the Fluent-informed translucent gradients, highlights, blur, shadows,
+animated background and reduced-motion behaviour. Solid fallback surfaces are used
+when backdrop filtering is unavailable. Deploy the central platform API first;
+no new database tables or environment settings are needed for this shell update.
 
 The previous Learning-specific green palette, login screen and promotional footer
 have been removed. Components derive their colors from central tokens; brand buttons

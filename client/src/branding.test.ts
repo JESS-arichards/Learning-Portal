@@ -3,7 +3,7 @@ import { applyBranding } from './branding';
 import type { PublicConfig } from '../../shared/learning';
 
 const branding: PublicConfig['branding'] = {
-  organisationName: 'School', primaryColor: '#713486', backgroundColor: '#171523', textColor: '#fff2dd',
+  appName: 'Applications Portal', organisationName: 'School', primaryColor: '#713486', backgroundColor: '#171523', textColor: '#fff2dd',
   accentColor: '#f5bc78', logoUrl: 'https://portal.school.test/api/branding/logo',
   iconUrl: 'https://portal.school.test/api/branding/icon', backgroundUrl: 'https://portal.school.test/api/branding/background',
   footerLogoUrl: null, websiteUrl: 'https://school.test',
@@ -18,7 +18,7 @@ describe('central branding application', () => {
     applyBranding(branding);
     expect(style.setProperty).toHaveBeenCalledWith('--brand', branding.primaryColor);
     expect(style.setProperty).toHaveBeenCalledWith('--page-background', branding.backgroundColor);
-    expect(style.setProperty).toHaveBeenCalledWith('--text', branding.textColor);
+    expect(style.setProperty).toHaveBeenCalledWith('--branding-text', branding.textColor);
     expect(style.setProperty).toHaveBeenCalledWith('--app-bg-image', `url("${branding.backgroundUrl}")`);
     expect(style.setProperty).toHaveBeenCalledWith('--brand-foreground', '#ffffff');
     expect(icon.href).toBe(branding.iconUrl);
@@ -31,7 +31,7 @@ describe('central branding application', () => {
     applyBranding({ ...branding, backgroundColor: '', textColor: '', backgroundUrl: null, iconUrl: null });
     expect(style.setProperty).toHaveBeenCalledWith('--page-background', branding.primaryColor);
     expect(style.setProperty).toHaveBeenCalledWith('--app-bg-image', 'none');
-    expect(style.removeProperty).toHaveBeenCalledWith('--text');
+    expect(style.removeProperty).toHaveBeenCalledWith('--branding-text');
     expect(icon.removeAttribute).toHaveBeenCalledWith('href');
   });
 });

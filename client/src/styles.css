@@ -1,30 +1,25 @@
 @import url('./navigation/navigation.css');
+@import url('./branding/glass.css');
 
 :root {
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   color: var(--text);
-  background: var(--page-background);
+  background: var(--app-bg-deep);
   --brand: #002454;
   --brand-foreground: #ffffff;
   --brand-accent: #8fd8ff;
   --page-background: var(--brand);
-  --text: #f4f7fc;
-  --text-muted: color-mix(in srgb, var(--text), transparent 25%);
-  --border: color-mix(in srgb, var(--text), transparent 83%);
+  --border: var(--border-subtle);
   --radius: 16px;
-  --surface: color-mix(in srgb, var(--page-background), black 18%);
+  --surface: var(--surface-canvas);
   --danger: #ffc0b7;
-  --surface-hover: color-mix(in srgb, var(--brand-accent), transparent 90%);
-  --glass-bg: color-mix(in srgb, var(--surface), transparent 15%);
-  --glass-bg-strong: color-mix(in srgb, var(--surface), transparent 4%);
-  --glass-shadow: 0 6px 24px #00000026;
-  --glass-highlight: inset 0 1px 0 #ffffff08;
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background-image: var(--app-bg-image, none); background-size: cover; background-position: center; background-attachment: fixed; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input, textarea, select { font: inherit; }
 button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
@@ -49,7 +44,7 @@ p { line-height: 1.65; }
 .text-button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; color: var(--brand-accent); padding: 6px 0; font-size: .85rem; text-decoration: underline; text-underline-offset: 4px; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; padding: 10px; min-height: 42px; border: 1px solid var(--border); background: transparent; color: inherit; border-radius: 8px; }
 .danger { color: var(--danger); }
-.panel { background: var(--glass-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; backdrop-filter: blur(18px); }
+.panel { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius); padding: 26px; box-shadow: var(--glass-shadow), var(--glass-highlight); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); }
 .alert { padding: 13px 16px; border: 1px solid var(--border); background: var(--surface-hover); border-radius: 9px; font-size: .88rem; line-height: 1.6; margin: 16px 0; overflow-wrap: anywhere; }
 .alert.error { border-color: #fbb0a34d; background: #c9635114; color: #ffd1c9; }
 .alert.success { color: #caeddb; }
@@ -83,7 +78,7 @@ legend { padding: 0 8px; font-size: .9rem; }
 .period-content::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--brand-accent); position: absolute; left: -4px; top: 33px; box-shadow: 0 0 0 5px var(--page-background); }
 .period-label { display: flex; gap: 10px; align-items: center; color: var(--text-muted); font-size: .75rem; margin-bottom: 10px; }
 .period-label .pill { font-size: .63rem; padding: 3px 7px; }
-.lesson-card { display: flex; border: 1px solid var(--border); border-radius: 11px; background: var(--glass-bg); backdrop-filter: blur(18px); overflow: hidden; margin-bottom: 10px; }
+.lesson-card { display: flex; border: 1px solid var(--glass-border); border-radius: 11px; background: var(--glass-bg); box-shadow: var(--glass-shadow), var(--glass-highlight); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); overflow: hidden; margin-bottom: 10px; }
 .lesson-accent { width: 4px; background: var(--brand-accent); flex-shrink: 0; }
 .lesson-card-body { padding: 20px 24px; flex: 1; min-width: 0; }
 .lesson-card .eyebrow { font-size: .62rem; margin-bottom: 9px; color: var(--brand-accent); }
@@ -140,7 +135,7 @@ legend { padding: 0 8px; font-size: .9rem; }
 .card-actions { display: flex; gap: 20px; align-items: center; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .roster { margin-top: 24px; }
 summary { cursor: pointer; font-weight: 600; }
-details[open] summary { margin-bottom: 20px; }
+.roster[open] summary { margin-bottom: 20px; }
 .table-scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: .83rem; text-align: left; }
 th { font-size: .7rem; color: var(--text-muted); letter-spacing: .03em; font-weight: 550; padding: 14px 12px; border-bottom: 1px solid var(--border); }
@@ -159,8 +154,10 @@ td { padding: 14px 12px; border-bottom: 1px solid var(--border); overflow-wrap: 
 .app-footer { display: flex; justify-content: center; align-items: center; gap: 9px; flex-wrap: wrap; color: var(--text-muted); font-size: .7rem; border-top: 1px solid var(--border); margin-top: 50px; padding: 25px 0; }
 .app-footer img { max-width: 120px; max-height: 40px; object-fit: contain; }
 .loading-screen { display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; min-height: 70vh; padding: 35px; text-align: center; }
-.mobile-learning-links { list-style: none; padding: 0; margin: 0; }
-.mobile-learning-links a { display: flex; align-items: center; gap: 10px; padding: 14px 12px; border-radius: 6px; text-decoration: none; color: var(--text-muted); font-weight: 600; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .panel, .lesson-card, .day-tabs { background: var(--brand-deep); }
+}
+@media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 @media (min-width: 1100px) { .timetable-area { max-width: 950px; } }
 @media (max-width: 900px) {
   .family-layout { grid-template-columns: 230px minmax(0, 1fr); gap: 24px; }

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { HttpError, errorHandler, logger } from './errors.js';
 import { requireUser, requireAdmin, signOut } from './auth.js';
-import { publicConfig, findUsers } from './platform.js';
+import { publicConfig, findUsers, navigationFor, platformImage } from './platform.js';
 import { createSsoRouter } from './sso.js';
 import { transaction, pool } from './db.js';
 import { snapshot, save, saveStructure, remove } from './repository.js';
@@ -61,6 +61,13 @@ export function createApp() {
     next();
   });
   app.get('/api/config', async (_req, res) => res.json(await publicConfig()));
+  app.get('/api/branding/assets/:asset', async (req, res) => {
+    const asset = z.enum(['logo', 'icon', 'background', 'footerLogo']).parse(req.params.asset);
+    const image = await platformImage(`/learning/assets/${asset}`);
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.type(image.contentType).send(image.data);
+  });
   app.get('/api/health', async (_req, res) => {
     await (await pool()).request().query('SELECT 1 AS ok');
     await publicConfig();
@@ -75,6 +82,13 @@ export function createApp() {
   const api = Router();
   api.use(requireUser);
   api.get('/me', (req, res) => res.json(req.user));
+  api.get('/navigation', async (req, res) => res.json(await navigationFor(req.user!.id)));
+  api.get('/me/avatar', async (req, res) => {
+    const image = await platformImage(`/learning/users/${req.user!.id}/avatar`);
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.type(image.contentType).send(image.data);
+  });
   api.get('/learning', async (req, res) => {
     const all = await snapshot();
     res.json({ ...visibleSnapshot(req.user!, all), children: childrenFor(req.user!, all) });
