@@ -111,6 +111,25 @@ describe('shared navigation', () => {
     expect(html).not.toContain('href="/admin"');
   });
 
+  it('shares parking labels and external admin destinations in desktop and mobile account menus', () => {
+    const props = {
+      ...defaults, adminUrl: 'https://portal.example.org/admin',
+      parkingReleaseUrl: 'https://portal.example.org/parking?release=1', parkingBay: 'A12',
+    };
+    const desktop = renderToStaticMarkup(createElement(NavigationBar, props));
+    expect(desktop).toContain('href="https://portal.example.org/admin" role="menuitem"');
+    expect(desktop).toContain('href="https://portal.example.org/parking?release=1" role="menuitem"');
+    expect(desktop).toContain('Parking Release (A12)');
+    expect(desktop.indexOf('My Profile')).toBeLessThan(desktop.indexOf('Parking Release'));
+    expect(desktop.indexOf('Parking Release')).toBeLessThan(desktop.indexOf('> Admin'));
+    state.index = 0; state.mobile = true; state.menu = false;
+    const mobile = renderToStaticMarkup(find(NavigationBar(props), (item) => item.className === 'jess-nav-mobile'));
+    expect(mobile).toContain('Parking Release (A12)');
+    expect(mobile).toContain('href="https://portal.example.org/admin" role="menuitem"');
+    expect(mobile.indexOf('Parking Release')).toBeLessThan(mobile.indexOf('My Profile'));
+    expect(mobile.indexOf('My Profile')).toBeLessThan(mobile.indexOf('> Admin'));
+  });
+
   it('makes missing Portal configuration explicit instead of linking to a nonexistent profile', () => {
     const html = renderToStaticMarkup(createElement(NavigationBar, { ...defaults, profileUrl: null }));
     expect(html).toContain('APPLICATIONS_PORTAL_URL is not configured');

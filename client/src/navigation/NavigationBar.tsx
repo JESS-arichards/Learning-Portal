@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Info, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, ShieldCheck, UserRound, X } from 'lucide-react';
+import { CarFront, Info, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, ShieldCheck, UserRound, X } from 'lucide-react';
 import './navigation.css';
 
 export interface NavigationUser {
@@ -23,13 +23,15 @@ export interface NavigationBarProps {
   profileUrl?: string | null;
   adminUrl?: string;
   accountItems?: ReactNode;
+  parkingReleaseUrl?: string | null;
+  parkingBay?: string | null;
   signOut?: () => Promise<void>;
 }
 
-function ProfileLink({ url }: { url: string }) {
+function AccountLink({ url, children }: { url: string; children: ReactNode }) {
   return url.startsWith('/') && !url.startsWith('//')
-    ? <Link to={url} role="menuitem"><UserRound size={18} /> My Profile</Link>
-    : <a href={url} role="menuitem"><UserRound size={18} /> My Profile</a>;
+    ? <Link to={url} role="menuitem">{children}</Link>
+    : <a href={url} role="menuitem">{children}</a>;
 }
 
 export function NavigationAvatar({ name }: { name: string }) {
@@ -64,7 +66,7 @@ function ApplicationInfo({ appName, user }: { appName: string; user?: Navigation
 
 export function NavigationBar({
   appName, brand, navigation, mobileNavigation, actions, mobileActions, user, avatar, support,
-  profileUrl, adminUrl, accountItems, signOut,
+  profileUrl, adminUrl, accountItems, parkingReleaseUrl, parkingBay, signOut,
   desktopSidebar = false,
 }: NavigationBarProps) {
   const location = useLocation();
@@ -159,10 +161,14 @@ export function NavigationBar({
     }
   };
 
-  const profileLink = profileUrl ? <ProfileLink url={profileUrl} /> : <><button type="button" role="menuitem" disabled><UserRound size={18} /> My Profile</button><p role="status">My Profile unavailable: APPLICATIONS_PORTAL_URL is not configured.</p></>;
+  const profileLink = profileUrl ? <AccountLink url={profileUrl}><UserRound size={18} /> My Profile</AccountLink> : <><button type="button" role="menuitem" disabled><UserRound size={18} /> My Profile</button><p role="status">My Profile unavailable: APPLICATIONS_PORTAL_URL is not configured.</p></>;
+  const extraAccountItems = <>
+    {parkingReleaseUrl && <AccountLink url={parkingReleaseUrl}><CarFront size={18} /> Parking Release{parkingBay ? ` (${parkingBay})` : ''}</AccountLink>}
+    {accountItems}
+  </>;
   const accountLinks = (
     <>
-      {adminUrl && <Link to={adminUrl} role="menuitem"><ShieldCheck size={18} /> Admin</Link>}
+      {adminUrl && <AccountLink url={adminUrl}><ShieldCheck size={18} /> Admin</AccountLink>}
       {signOut && <button type="button" role="menuitem" disabled={loggingOut} onClick={() => void logout()}><LogOut size={18} />{loggingOut ? 'Signing out...' : 'Sign out'}</button>}
       {logoutError && <p role="alert">{logoutError}</p>}
     </>
@@ -197,7 +203,7 @@ export function NavigationBar({
                 <div id={menuId} ref={menu} className="jess-nav-dropdown" role="menu" aria-label="Account" onKeyDown={menuKeys}>
                   <div className="jess-nav-account-heading" role="presentation"><strong>{user.displayName}</strong><span>{user.email}</span></div>
                   {profileLink}
-                  {accountItems}
+                  {extraAccountItems}
                   {accountLinks}
                 </div>
               )}
@@ -237,7 +243,7 @@ export function NavigationBar({
             {mobileNavigation}{mobileActions}
             {user && (
               <div className="jess-nav-mobile-account" role="menu" aria-label="Account" onKeyDown={menuKeys}>
-                {accountItems}
+                {extraAccountItems}
                 {profileLink}
                 {accountLinks}
               </div>

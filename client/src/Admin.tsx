@@ -1,19 +1,41 @@
 import { useState, type FormEvent } from 'react';
 import { Clock3, FileUp, Plus, ShieldCheck, Trash2 } from 'lucide-react';
-import { DAYS, structureSchema, type DaySlot, type Snapshot, type ImportPreview } from '../../shared/learning';
+import { DAYS, addPeriods, dayStructureSchema, periodTypeId, type DaySlot, type PeriodType, type Snapshot, type ImportPreview } from '../../shared/learning';
 import { api, errorMessage, fileBody } from './api';
 
 function DayStructure({ data, refresh }: { data: Snapshot; refresh: () => Promise<void> }) {
   const [slots, setSlots] = useState(data.slots);
+  const [periodTypes, setPeriodTypes] = useState(data.periodTypes);
   const [day, setDay] = useState(0);
+  const [scope, setScope] = useState('day');
+  const [selectedDays, setSelectedDays] = useState<number[]>([0]);
+  const [period, setPeriod] = useState({ name: 'Lesson', typeId: data.periodTypes[0].id, start: '08:00', end: '09:00' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   function change(id: string, patch: Partial<DaySlot>) { setSlots(slots.map((s) => s.id === id ? { ...s, ...patch } : s)); setNotice(''); }
+  function changeType(id: string, patch: Partial<PeriodType>) {
+    setPeriodTypes(periodTypes.map((type) => type.id === id ? { ...type, ...patch } : type));
+    const kind = patch.kind;
+    if (kind) setSlots(slots.map((slot) => periodTypeId(slot) === id ? { ...slot, kind } : slot));
+    setNotice('');
+  }
+  function addPeriod() {
+    setError(''); setNotice('');
+    try {
+      const type = periodTypes.find((type) => type.id === period.typeId);
+      if (!type) throw new Error('Choose a period type before adding a period.');
+      const days = scope === 'week' ? [0, 1, 2, 3, 4] : scope === 'selected' ? selectedDays : [day];
+      const next = addPeriods(slots, { ...period, kind: type.kind }, days, () => crypto.randomUUID());
+      dayStructureSchema.parse({ slots: next, periodTypes });
+      setSlots(next);
+      setNotice(`Period added to ${days.map((index) => DAYS[index]).join(', ')}. Save whole week to apply.`);
+    } catch (error) { setError(errorMessage(error)); }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(''); setNotice('');
     try {
-      await api('/admin/structure', 'PUT', structureSchema.parse(slots));
+      await api('/admin/structure', 'PUT', dayStructureSchema.parse({ slots, periodTypes }));
       await refresh(); setNotice('Weekly day structure saved.');
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
@@ -21,18 +43,44 @@ function DayStructure({ data, refresh }: { data: Snapshot; refresh: () => Promis
   return <section className="panel">
     <div className="section-heading"><div><p className="eyebrow">WEEKLY SCHEDULE</p><h2>Build the school day</h2></div><Clock3 size={24} /></div>
     <p className="muted">Set lesson periods and breaks for each day, in school local time. Each period is shared across classes. Periods used by lessons cannot be removed or changed to breaks.</p>
+    <fieldset disabled={busy}>
+      <legend>Period types</legend>
+      <p className="muted">Manage the options shown in Type. Lesson types can have lessons scheduled; break types cannot. Changes are applied when you save the whole week.</p>
+      {periodTypes.map((type) => <div key={type.id} className="structure-row">
+        <label>Type name<input required maxLength={100} value={type.name} onChange={(e) => changeType(type.id, { name: e.target.value })} /></label>
+        <label>Behaviour<select value={type.kind} onChange={(e) => changeType(type.id, { kind: e.target.value === 'break' ? 'break' : 'lesson' })}><option value="lesson">Lesson (schedulable)</option><option value="break">Break (not schedulable)</option></select></label>
+        <button type="button" className="icon-button danger" aria-label={`Remove type ${type.name}`} disabled={periodTypes.length === 1 || slots.some((slot) => periodTypeId(slot) === type.id)} onClick={() => { setPeriodTypes(periodTypes.filter((item) => item.id !== type.id)); if (period.typeId === type.id) setPeriod({ ...period, typeId: '' }); setNotice(''); }}><Trash2 size={17} /></button>
+      </div>)}
+      <p className="muted">Types in use cannot be removed. Change those periods to another type first.</p>
+      <button type="button" className="btn secondary" disabled={periodTypes.length >= 30} onClick={() => { setPeriodTypes([...periodTypes, { id: crypto.randomUUID(), name: '', kind: 'lesson' }]); setNotice(''); }}><Plus size={16} /> Add type</button>
+    </fieldset>
     <div className="day-tabs">{DAYS.map((d, i) => <button key={d} aria-pressed={day === i} className={day === i ? 'active' : ''} onClick={() => setDay(i)}>{d.slice(0, 3)}</button>)}</div>
     <form onSubmit={(event) => void submit(event)}>
+      <fieldset disabled={busy}>
       <h3>{DAYS[day]}</h3>
       {slots.filter((s) => s.day === day).map((slot) => <div key={slot.id} className="structure-row">
         <label>Period name<input required maxLength={100} value={slot.name} onChange={(e) => change(slot.id, { name: e.target.value })} /></label>
-        <label>Type<select value={slot.kind} onChange={(e) => change(slot.id, { kind: e.target.value === 'break' ? 'break' : 'lesson' })}><option value="lesson">Lesson</option><option value="break">Break</option></select></label>
+        <label>Type<select value={periodTypeId(slot)} onChange={(e) => { const type = periodTypes.find((type) => type.id === e.target.value); if (type) change(slot.id, { typeId: type.id, kind: type.kind }); }}>{periodTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label>
         <label>Start<input required type="time" value={slot.start} onChange={(e) => change(slot.id, { start: e.target.value })} /></label>
         <label>End<input required type="time" value={slot.end} onChange={(e) => change(slot.id, { end: e.target.value })} /></label>
         <button type="button" className="icon-button danger" aria-label={`Remove ${slot.name}`} onClick={() => { setSlots(slots.filter((s) => s.id !== slot.id)); setNotice(''); }}><Trash2 size={17} /></button>
       </div>)}
       {!slots.some((s) => s.day === day) && <p className="alert">No periods on this day. Add a lesson or break to get started.</p>}
-      <div className="form-actions"><button type="button" className="btn secondary" disabled={busy || slots.length >= 140} onClick={() => { setSlots([...slots, { id: crypto.randomUUID(), day, name: 'Lesson', kind: 'lesson', start: '08:00', end: '09:00' }]); setNotice(''); }}><Plus size={16} /> Add period</button><button className="btn primary" disabled={busy}>{busy ? 'Saving...' : 'Save whole week'}</button><button type="button" className="text-button" disabled={busy} onClick={() => { setSlots(data.slots); setError(''); setNotice('Unsaved edits discarded.'); }}>Discard edits</button></div>
+      </fieldset>
+      <fieldset disabled={busy}>
+        <legend>Add a period</legend>
+        <div className="structure-row">
+          <label>New period name<input maxLength={100} value={period.name} onChange={(e) => setPeriod({ ...period, name: e.target.value })} /></label>
+          <label>New period type<select value={period.typeId} onChange={(e) => setPeriod({ ...period, typeId: e.target.value })}><option value="" disabled>Choose type</option>{periodTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label>
+          <label>New period start<input type="time" value={period.start} onChange={(e) => setPeriod({ ...period, start: e.target.value })} /></label>
+          <label>New period end<input type="time" value={period.end} onChange={(e) => setPeriod({ ...period, end: e.target.value })} /></label>
+        </div>
+        <label>Apply period to<select value={scope} onChange={(e) => setScope(e.target.value)}><option value="day">Current day ({DAYS[day]})</option><option value="selected">Selected days</option><option value="week">All week (Monday-Friday)</option></select></label>
+        {scope === 'selected' && <div className="day-tabs" role="group" aria-label="Period days">{DAYS.map((name, index) => <label key={name}><input type="checkbox" checked={selectedDays.includes(index)} onChange={(e) => setSelectedDays(e.target.checked ? [...selectedDays, index] : selectedDays.filter((value) => value !== index))} />{name}</label>)}</div>}
+        <p className="muted">Adds the same name, type and times to each chosen day. Existing periods are kept. Overlaps are rejected for the entire selection.</p>
+        <button type="button" className="btn secondary" disabled={slots.length >= 140} onClick={addPeriod}><Plus size={16} /> Add period</button>
+      </fieldset>
+      <div className="form-actions"><button className="btn primary" disabled={busy}>{busy ? 'Saving...' : 'Save whole week'}</button><button type="button" className="text-button" disabled={busy} onClick={() => { setSlots(data.slots); setPeriodTypes(data.periodTypes); setPeriod({ ...period, typeId: data.periodTypes[0].id }); setError(''); setNotice('Unsaved edits discarded.'); }}>Discard edits</button></div>
     </form>
     {error && <p role="alert" className="alert error">{error}</p>}
     {notice && <p role="status" className="alert success">{notice}</p>}

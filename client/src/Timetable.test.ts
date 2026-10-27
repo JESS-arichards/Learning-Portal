@@ -2,12 +2,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Timetable } from './Timetable';
-import type { Snapshot, Student, User } from '../../shared/learning';
+import { DEFAULT_PERIOD_TYPES, type Snapshot, type Student, type User } from '../../shared/learning';
 
 const child: Student = { email: 'pending@school.test', displayName: 'Pending Student' };
 const other: Student = { email: 'other@school.test', displayName: 'Other Student' };
 const teacher = { id: 1, email: 'teacher@school.test', displayName: 'Teacher' };
 const data: Snapshot = {
+  periodTypes: DEFAULT_PERIOD_TYPES,
   classes: [
     { id: 'one', name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [teacher], students: [child] },
     { id: 'two', name: 'English', yearGroup: '8', division: 'Primary', teachers: [teacher], students: [other] },

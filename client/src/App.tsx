@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router';
-import { BookOpen, CarFront } from 'lucide-react';
+import { BookOpen } from 'lucide-react';
 import { isAdmin, canManage, type User, type Snapshot, type PublicConfig, type Student, type PortalNavigation } from '../../shared/learning';
 import { api, ApiError, errorMessage, redirectToSignIn } from './api';
 import { NavigationBar } from './navigation/NavigationBar';
@@ -10,6 +10,7 @@ import { Classes } from './Classes';
 import { Admin } from './Admin';
 import { PortalLinks } from './navigation/PortalLinks';
 import { Avatar } from './Avatar';
+import { SupportInfoButton } from './navigation/SupportInfoButton';
 
 type LearningData = Snapshot & { children: Student[] };
 export function App() {
@@ -69,7 +70,8 @@ export function App() {
     <div className="fluid-bg" aria-hidden="true"><div className="orb orb-1" /><div className="orb orb-2" /><div className="orb orb-3" /></div>
     <NavigationBar appName={config.branding.appName} brand={config.branding.logoUrl ? <img src={config.branding.logoUrl} alt={config.branding.organisationName} /> : <BookOpen size={26} />} desktopSidebar navigation={links} mobileNavigation={<ul className="jess-nav-portal-links">{links}</ul>}
       user={user} avatar={<Avatar user={user} />} profileUrl={config.profileUrl} adminUrl={navigation.adminUrl ?? undefined} signOut={logout}
-      accountItems={navigation.parkingReleaseUrl && <a href={navigation.parkingReleaseUrl} role="menuitem"><CarFront size={18} /> Parking Release</a>} />
+      support={<SupportInfoButton session={{ user, provider: 'central' }} />}
+      parkingReleaseUrl={navigation.parkingReleaseUrl} parkingBay={navigation.parkingBay} />
     <div className="portal-content"><main className="app-main">
       {error && <div className="alert error" role="alert">{error} <button className="text-button" onClick={() => void refresh().catch(() => {})}>Retry</button></div>}
       {!data ? !error && <div className="loading-screen" role="status">Loading your learning...</div> : <Routes>

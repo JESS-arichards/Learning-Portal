@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
-import { classSchema, lessonSchema, type User, type Snapshot } from '../shared/learning.js';
+import { classSchema, lessonSchema, DEFAULT_PERIOD_TYPES, type User, type Snapshot } from '../shared/learning.js';
 import sharp from 'sharp';
 
 vi.mock('./config.js', () => ({ config: {
@@ -26,6 +26,7 @@ const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
 const user = (id: number, roles: string[], studentEmails: string[] = []): User => ({ ...person(id), roles, studentEmails, isActive: true, sessionVersion: 0 });
 const seed: Snapshot = {
+  periodTypes: DEFAULT_PERIOD_TYPES,
   classes: [
     { id: uuid(1), name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [person(10)], students: [person(20), person(21)] },
     { id: uuid(2), name: 'English', yearGroup: '8', division: 'Secondary', teachers: [person(11)], students: [person(22)] },
@@ -67,7 +68,7 @@ beforeEach(async () => {
     if (kind === 'class') state.classes = [...state.classes.filter((c) => c.id !== id), classSchema.parse(value)];
     if (kind === 'lesson') state.lessons = [...state.lessons.filter((l) => l.id !== id), lessonSchema.parse(value)];
   });
-  vi.mocked(saveStructure).mockImplementation(async (_tx, slots) => { state.slots = slots; });
+  vi.mocked(saveStructure).mockImplementation(async (_tx, structure) => { Object.assign(state, structure); });
   vi.mocked(remove).mockImplementation(async (_tx, kind, id) => {
     if (kind === 'class') state.classes = state.classes.filter((c) => c.id !== id);
     if (kind === 'lesson') state.lessons = state.lessons.filter((l) => l.id !== id);
@@ -99,7 +100,7 @@ describe('authenticated learning API', () => {
     expect((await call('/me/avatar')).status).toBe(404);
   });
   it('loads the central menu only for the authenticated identity and fails explicitly on central outage', async () => {
-    vi.mocked(navigationFor).mockResolvedValue({ items: [], portalUrl: 'http://localhost:8080', learningUrl: 'http://localhost:5174', adminUrl: null, parkingReleaseUrl: null });
+    vi.mocked(navigationFor).mockResolvedValue({ items: [], portalUrl: 'http://localhost:8080', learningUrl: 'http://localhost:5174', adminUrl: null, parkingReleaseUrl: null, parkingBay: null });
     expect((await call('/navigation', 'GET', undefined, false)).status).toBe(401);
     expect(navigationFor).not.toHaveBeenCalled();
     expect((await call('/navigation?id=999')).status).toBe(200);
@@ -176,6 +177,35 @@ describe('authenticated learning API', () => {
     expect((await call('/admin/structure', 'PUT', [])).status).toBe(409);
     expect((await call('/admin/structure', 'PUT', seed.slots.map((s) => s.id === uuid(3) ? { ...s, kind: 'break' } : s))).status).toBe(409);
     expect((await call('/admin/structure', 'PUT', seed.slots)).status).toBe(200);
+  });
+  it.each(['Learn Admin', 'Full Admin'])('persists custom types and multi-day periods for %s and exposes them in timetables', async (role) => {
+    current = user(10, [role]);
+    const type = { id: uuid(30), name: 'Registration', kind: 'lesson' };
+    const added = [0, 1, 2, 3, 4].map((day) => ({
+      id: uuid(40 + day), day, name: 'Registration', kind: 'lesson', typeId: type.id, start: '07:30', end: '07:45',
+    }));
+    const structure = { slots: [...seed.slots, ...added], periodTypes: [...DEFAULT_PERIOD_TYPES, type] };
+    const response = await call('/admin/structure', 'PUT', structure);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(structure);
+    expect(saveStructure).toHaveBeenCalledWith(expect.anything(), structure);
+    current = user(20, ['Student']);
+    const timetable = await (await call('/learning')).json();
+    expect(timetable.periodTypes).toEqual(structure.periodTypes);
+    expect(timetable.slots).toEqual(structure.slots);
+  });
+  it('rejects invalid type changes, removal of in-use types and multi-day overlaps without saving', async () => {
+    current = user(10, ['Learn Admin']);
+    expect((await call('/admin/structure', 'PUT', { slots: seed.slots, periodTypes: [DEFAULT_PERIOD_TYPES[0]] })).status).toBe(400);
+    const breaks = seed.slots.map((slot) => slot.kind === 'lesson' ? { ...slot, kind: 'break', typeId: 'lesson' } : slot);
+    expect((await call('/admin/structure', 'PUT', {
+      slots: breaks, periodTypes: DEFAULT_PERIOD_TYPES.map((type) => ({ ...type, kind: 'break' })),
+    })).status).toBe(409);
+    expect((await call('/admin/structure', 'PUT', {
+      slots: [...seed.slots, { ...seed.slots[0], id: uuid(80), start: '08:30' }], periodTypes: DEFAULT_PERIOD_TYPES,
+    })).status).toBe(400);
+    expect(saveStructure).not.toHaveBeenCalled();
+    expect(state).toEqual(seed);
   });
   it('protects lesson file downloads by live class membership', async () => {
     current = user(22, ['Student']);

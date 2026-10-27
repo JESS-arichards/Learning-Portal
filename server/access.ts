@@ -5,6 +5,7 @@ export function visibleSnapshot(user: User, all: Snapshot): Snapshot {
     || c.students.some((s) => mayViewStudent(user, s)));
   return {
     slots: all.slots,
+    periodTypes: all.periodTypes,
     classes: classes.map((c) => canManage(user, c) ? c : {
       ...c, students: c.students.filter((s) => mayViewStudent(user, s)),
     }),

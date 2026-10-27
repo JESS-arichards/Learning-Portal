@@ -16,7 +16,7 @@ import { previewClasses, CSV_HEADERS } from './importClasses.js';
 import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
-import { canManage, classKey, lessonInputSchema, structureSchema, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { canManage, classKey, lessonInputSchema, dayStructureSchema, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
 
 const idSchema = z.string().uuid();
 function id(value: unknown) { return idSchema.parse(value); }
@@ -128,14 +128,15 @@ export function createApp() {
     res.json({ ok: true });
   });
   api.put('/admin/structure', requireAdmin, async (req, res) => {
-    const slots = structureSchema.parse(req.body);
-    await transaction(async (tx) => {
+    const structure = await transaction(async (tx) => {
       const data = await snapshot(tx);
-      for (const lesson of data.lessons) checkSchedule(lesson, data.lessons, data.classes, slots, lesson.id);
-      await saveStructure(tx, slots);
+      const next = dayStructureSchema.parse(Array.isArray(req.body) ? { slots: req.body, periodTypes: data.periodTypes } : req.body);
+      for (const lesson of data.lessons) checkSchedule(lesson, data.lessons, data.classes, next.slots, lesson.id);
+      await saveStructure(tx, next);
+      return next;
     });
-    logger.info({ actorId: req.user!.id, periods: slots.length }, 'Learning week structure updated');
-    res.json(slots);
+    logger.info({ actorId: req.user!.id, periods: structure.slots.length, types: structure.periodTypes.length }, 'Learning week structure updated');
+    res.json(Array.isArray(req.body) ? structure.slots : structure);
   });
   async function writeLesson(req: express.Request, res: express.Response) {
     const input = lessonInputSchema.parse(req.body);

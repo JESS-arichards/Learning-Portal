@@ -52,6 +52,7 @@ export const navigationSchema = z.object({
   learningUrl: z.url(),
   adminUrl: z.url().nullable(),
   parkingReleaseUrl: z.url().nullable(),
+  parkingBay: z.string().nullable(),
 });
 export type PortalNavigation = z.infer<typeof navigationSchema>;
 export const classSchema = z.object({
@@ -63,12 +64,29 @@ export const classSchema = z.object({
   students: z.array(studentSchema).min(1),
 });
 export type LearningClass = z.infer<typeof classSchema>;
+export const periodTypeSchema = z.object({
+  id: z.union([z.literal('lesson'), z.literal('break'), z.string().uuid()]),
+  name: z.string().trim().min(1).max(100),
+  kind: z.enum(['lesson', 'break']),
+});
+export type PeriodType = z.infer<typeof periodTypeSchema>;
+export const DEFAULT_PERIOD_TYPES: PeriodType[] = [
+  { id: 'lesson', name: 'Lesson', kind: 'lesson' },
+  { id: 'break', name: 'Break', kind: 'break' },
+];
+export const periodTypesSchema = z.array(periodTypeSchema).min(1).max(30).superRefine((types, ctx) => {
+  if (new Set(types.map((type) => type.id)).size !== types.length)
+    ctx.addIssue({ code: 'custom', message: 'Period type IDs must be unique.' });
+  if (new Set(types.map((type) => type.name.toLowerCase())).size !== types.length)
+    ctx.addIssue({ code: 'custom', message: 'Period type names must be unique.' });
+});
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm (24-hour time).');
 export const slotSchema = z.object({
   id: z.string().uuid(),
   day: z.number().int().min(0).max(6),
   name: z.string().trim().min(1).max(100),
   kind: z.enum(['lesson', 'break']),
+  typeId: z.string().optional(),
   start: time,
   end: time,
 }).refine((s) => s.start < s.end, { message: 'End time must be after start time.', path: ['end'] });
@@ -83,6 +101,21 @@ export const structureSchema = z.array(slotSchema).max(140).superRefine((slots, 
     }
   }
 });
+export function periodTypeId(slot: Pick<DaySlot, 'kind' | 'typeId'>) { return slot.typeId ?? slot.kind; }
+export const dayStructureSchema = z.object({
+  slots: structureSchema,
+  periodTypes: periodTypesSchema,
+}).superRefine(({ slots, periodTypes }, ctx) => {
+  for (const [index, slot] of slots.entries()) {
+    const type = periodTypes.find((type) => type.id === periodTypeId(slot));
+    if (!type || type.kind !== slot.kind)
+      ctx.addIssue({ code: 'custom', message: `Choose a valid period type for ${DAYS[slot.day]} / ${slot.name}.`, path: ['slots', index, 'typeId'] });
+  }
+});
+export function addPeriods(slots: DaySlot[], period: Omit<DaySlot, 'id' | 'day'>, days: number[], makeId: () => string): DaySlot[] {
+  const selected = z.array(z.number().int().min(0).max(6)).min(1, 'Select at least one day.').parse(days);
+  return structureSchema.parse([...slots, ...[...new Set(selected)].map((day) => ({ ...period, day, id: makeId() }))]);
+}
 export const linkSchema = z.object({
   id: z.string().uuid(),
   kind: z.enum(['link', 'teams']),
@@ -116,7 +149,7 @@ export const lessonSchema = lessonInputSchema.extend({
   id: z.string().uuid(), files: z.array(fileSchema), updatedAt: z.string(),
 });
 export type Lesson = z.infer<typeof lessonSchema>;
-export interface Snapshot { classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[] }
+export interface Snapshot { classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[] }
 export interface ImportPreview {
   classes: LearningClass[];
   rowCount: number;

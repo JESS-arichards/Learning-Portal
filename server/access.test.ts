@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { childrenFor, visibleSnapshot } from './access.js';
-import type { LearningClass, Snapshot, User } from '../shared/learning.js';
+import { DEFAULT_PERIOD_TYPES, type LearningClass, type Snapshot, type User } from '../shared/learning.js';
 
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
 const user = (id: number, roles: string[] = [], studentEmails: string[] = []): User => ({ ...person(id), roles, studentEmails, isActive: true, sessionVersion: 0 });
@@ -8,6 +8,7 @@ const classroom = (id: string, teacherId: number, studentIds: number[]): Learnin
   id, name: id, yearGroup: '7', division: 'Secondary', teachers: [person(teacherId)], students: studentIds.map(person),
 });
 const data: Snapshot = {
+  periodTypes: DEFAULT_PERIOD_TYPES,
   classes: [classroom('one', 1, [2, 3]), classroom('two', 4, [5])],
   slots: [],
   lessons: [{ id: 'lesson1', classId: 'one', name: 'One', description: '', links: [], files: [], slotIds: [], updatedAt: '' },

@@ -8,6 +8,15 @@ import { findUsers, getUser, platform, publicConfig, platformImage, navigationFo
 
 afterEach(() => vi.unstubAllGlobals());
 describe('central platform consumer', () => {
+  it('preserves the central parking label and account destinations', async () => {
+    const navigation = {
+      items: [], portalUrl: 'https://portal.school.test', learningUrl: 'https://learn.school.test',
+      adminUrl: 'https://portal.school.test/admin',
+      parkingReleaseUrl: 'https://portal.school.test/parking?release=1', parkingBay: 'A12',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(navigation))));
+    expect(await navigationFor(42)).toEqual(navigation);
+  });
   it('rewrites central asset URLs to same-origin image endpoints while preserving versions', async () => {
     const config = {
       branding: {

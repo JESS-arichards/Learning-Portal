@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
-import { DAYS, canManage, isEnrolledStudent, normaliseEmail, type Snapshot, type User, type Student, type Lesson, type LearningClass } from '../../shared/learning';
+import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass } from '../../shared/learning';
 
 export function Resources({ lesson }: { lesson: Lesson }) {
   return (
@@ -70,7 +70,7 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
             const scheduled = lessons.filter((l) => l.slotIds.includes(slot.id));
             return <div key={slot.id} className={`timeline-row ${slot.kind}`}>
               <div className="time"><strong>{slot.start}</strong><span>{slot.end}</span></div>
-              <div className="period-content"><div className="period-label">{slot.name}{slot.kind === 'break' && <span className="pill">Break</span>}</div>
+              <div className="period-content"><div className="period-label">{slot.name}<span className="pill">{data.periodTypes.find((type) => type.id === periodTypeId(slot))?.name}</span></div>
                 {slot.kind === 'break' ? <div className="break-card"><span aria-hidden="true">&#9749;</span> Take a break. Recharge for what comes next.</div>
                   : scheduled.length ? scheduled.map((lesson) => <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} />)
                     : <div className="free-period">No lesson scheduled</div>}

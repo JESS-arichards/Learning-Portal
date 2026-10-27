@@ -1,4 +1,7 @@
 .jess-navigation {
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
   --nav-scroll-tint: color-mix(in srgb, var(--app-bg-color, var(--brand, #002454)), black 18%);
   position: sticky;
   top: 0;
@@ -93,6 +96,7 @@
 }
 .jess-nav-account-heading { padding: 10px 12px; border-bottom: 1px solid var(--glass-border); margin-bottom: 6px; }
 .jess-nav-account-heading strong, .jess-nav-account-heading span { display: block; overflow-wrap: anywhere; }
+.jess-nav-account-heading strong { font-weight: 700; }
 .jess-nav-account-heading span { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
 .jess-nav-dropdown [role='menuitem'], .jess-nav-mobile-account [role='menuitem'] {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px;
@@ -101,6 +105,7 @@
 }
 .jess-nav-dropdown [role='menuitem']:hover, .jess-nav-dropdown [role='menuitem']:focus,
 .jess-nav-mobile-account [role='menuitem']:hover, .jess-nav-mobile-account [role='menuitem']:focus { background: var(--surface-hover); }
+.jess-nav-dropdown [role='menuitem'] > svg, .jess-nav-mobile-account [role='menuitem'] > svg { flex: none; }
 .jess-nav-dropdown [role='menuitem']:disabled, .jess-nav-mobile-account [role='menuitem']:disabled { opacity: 0.55; cursor: not-allowed; }
 .jess-nav-dropdown p, .jess-nav-mobile-account p { margin: 8px 12px; font-size: 0.85rem; overflow-wrap: anywhere; }
 .jess-nav-dropdown [role='alert'], .jess-nav-mobile-account [role='alert'] { color: var(--danger, #ff8a8a); }

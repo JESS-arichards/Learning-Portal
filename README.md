@@ -361,6 +361,16 @@ Home, Streaming and eligible Portal features link back to the matching central
 environment; Learning routes remain local. The central menu is authoritative,
 including trip attachment, staff absence and task-role eligibility.
 
+The info button uses the Applications Portal's identical **Build and support
+information** dialog, including the selectable report, privacy warning, copy action
+and explicit clipboard-failure guidance. The report identifies the Learning frontend
+build actually loaded and labels authentication **Applications Portal SSO**, rather
+than guessing the upstream Entra/OTP method. It excludes URL queries, fragments,
+tokens and cookies. Account details are shown only on request, never sent automatically.
+The three-dot menu uses the same account markup, typography and keyboard handling,
+including **Parking Release (bay)** when eligible. Profile and eligible central Admin
+links perform full-page navigation back to Applications Portal.
+
 The Portal's checked-in `glass.css` is shared, not a separately tuned Learning palette.
 It supplies the Fluent-informed translucent gradients, highlights, blur, shadows,
 animated background and reduced-motion behaviour. Solid fallback surfaces are used
@@ -381,9 +391,32 @@ node scripts\sync-navigation.mjs ..\Learning-Portal
 node scripts\sync-navigation.mjs --check ..\Learning-Portal
 ```
 
-The same sync command also copies the canonical branding color-token helper and tests.
+The same sync command also copies the canonical branding color-token helper, support
+dialog/report/modal/styles, build-metadata helper and their shared tests.
 Do not edit consumer navigation or color-token copies directly. Shared tests run with
 this app's test suite. Profile and central user administration link back to Applications Portal.
+
+## Period types and multi-day periods
+
+In **Learning Portal admin > Day structure**, Full Admin and Learn Admin users can
+add, rename and remove period types. Each type has **Lesson** (schedulable) or
+**Break** (not schedulable) behaviour. Both the existing-period Type dropdown and
+the new-period dropdown use this list. Types used by periods cannot be removed;
+reassign those periods first. A type cannot be changed to Break while its periods
+are used by lessons.
+
+Use **Add a period** to enter a name, type and times, then choose the current day,
+selected days (including weekends), or **All week (Monday-Friday)**. Each selected
+day gets an independent period with identical details. Existing periods are kept;
+if any selected day overlaps or the weekly 140-period limit is exceeded, nothing
+is added. Changes remain drafts until **Save whole week**; **Discard edits**
+restores both periods and type options.
+
+The structure and types are saved atomically in the existing `structure` JSON
+document in `dbo.LearningDocuments`. Existing array-only documents load with the
+original Lesson/Break options and are upgraded on save. No SQL schema migration
+or new Azure settings are required. The structure API accepts `{ slots, periodTypes }`;
+legacy slot-array requests retain the currently saved type list.
 
 ## Validation
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canManage, classKey, classSchema, isAdmin, lessonInputSchema, linkSchema, structureSchema, validateSchedule, type DaySlot, type LearningClass, type Lesson } from './learning.js';
+import { addPeriods, dayStructureSchema, DEFAULT_PERIOD_TYPES, periodTypesSchema, canManage, classKey, classSchema, isAdmin, lessonInputSchema, linkSchema, structureSchema, validateSchedule, type DaySlot, type LearningClass, type Lesson } from './learning.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const teacher = { id: 1, displayName: 'Teacher', email: 'teacher@school.test' };
@@ -13,6 +13,37 @@ const slots: DaySlot[] = [
 const lesson: Lesson = { id: uuid(5), classId: classroom.id, name: 'Fractions', description: '', links: [], files: [], slotIds: [slots[0].id], updatedAt: new Date().toISOString() };
 
 describe('weekly structure', () => {
+  it('adds one day, selected days or exactly Monday-Friday with independent period IDs', () => {
+    for (const days of [[3], [0, 2, 6], [0, 1, 2, 3, 4]]) {
+      let nextId = 20;
+      const result = addPeriods([], { name: 'Assembly', kind: 'break', typeId: 'break', start: '10:00', end: '10:30' }, days, () => uuid(nextId++));
+      expect(result.map((slot) => slot.day)).toEqual(days);
+      expect(new Set(result.map((slot) => slot.id)).size).toBe(days.length);
+      expect(result.every((slot) => slot.name === 'Assembly' && slot.start === '10:00' && slot.end === '10:30')).toBe(true);
+    }
+  });
+  it('rejects a multi-day add atomically if any selected day overlaps, is invalid or exceeds the limit', () => {
+    const period = { name: 'New', kind: 'lesson' as const, start: '08:30', end: '09:30' };
+    const original = structuredClone(slots);
+    let nextId = 20;
+    expect(() => addPeriods(slots, period, [2, 0], () => uuid(nextId++))).toThrow('overlap');
+    expect(slots).toEqual(original);
+    expect(() => addPeriods([], period, [], () => uuid(30))).toThrow('Select at least one day');
+    expect(() => addPeriods([], period, [7], () => uuid(30))).toThrow();
+    const maximum = Array.from({ length: 140 }, (_, i) => ({ ...slots[0], id: uuid(i + 100) }));
+    expect(() => addPeriods(maximum, period, [2], () => uuid(30))).toThrow();
+  });
+  it('validates configurable types and refuses missing, duplicate or inconsistent types', () => {
+    const custom = { id: uuid(30), name: 'Assembly', kind: 'break' as const };
+    const periodTypes = [...DEFAULT_PERIOD_TYPES, custom];
+    expect(dayStructureSchema.parse({ slots: [{ ...slots[1], typeId: custom.id }], periodTypes }).periodTypes).toEqual(periodTypes);
+    for (const types of [[], [custom, custom], [custom, { ...custom, id: uuid(31), name: ' assembly ' }]]) {
+      expect(periodTypesSchema.safeParse(types).success).toBe(false);
+    }
+    expect(dayStructureSchema.safeParse({ slots: [{ ...slots[0], typeId: custom.id }], periodTypes }).success).toBe(false);
+    expect(dayStructureSchema.safeParse({ slots: [{ ...slots[0], typeId: uuid(99) }], periodTypes }).success).toBe(false);
+    expect(dayStructureSchema.safeParse({ slots, periodTypes: [custom] }).success).toBe(false);
+  });
   it('accepts multiple days, adjacent lessons and breaks', () => expect(structureSchema.parse(slots)).toEqual(slots));
   it.each([
     [...slots, { ...slots[0], id: uuid(7), start: '08:30', end: '09:30' }],
