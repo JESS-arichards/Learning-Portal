@@ -4,10 +4,21 @@ vi.mock('./config.js', () => ({ config: {
   APPLICATIONS_PORTAL_URL: 'https://portal.school.test',
   PLATFORM_API_KEY: 'test-key-not-a-production-credential',
 } }));
-import { findUsers, getUser, platform } from './platform.js';
+import { findUsers, getUser, platform, publicConfig } from './platform.js';
 
 afterEach(() => vi.unstubAllGlobals());
 describe('central platform consumer', () => {
+  it('accepts central branding when optional website and assets are unset', async () => {
+    const config = {
+      branding: {
+        organisationName: 'School', primaryColor: '#123456', backgroundColor: '', textColor: '',
+        accentColor: '', logoUrl: null, iconUrl: null, backgroundUrl: null, footerLogoUrl: null, websiteUrl: null,
+      },
+      profileUrl: 'https://portal.school.test/profile',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(config), { status: 200 })));
+    expect(await publicConfig()).toEqual(config);
+  });
   it('sends service credentials only server-side, disables redirects, and has a timeout', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ users: [] }), { status: 200 }));
     vi.stubGlobal('fetch', fetch);

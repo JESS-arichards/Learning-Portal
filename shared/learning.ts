@@ -26,7 +26,7 @@ export const publicConfigSchema = z.object({
     organisationName: z.string(), primaryColor: z.string(),
     backgroundColor: z.string(), textColor: z.string(), logoUrl: z.string().nullable(),
     accentColor: z.string(), iconUrl: z.string().nullable(), backgroundUrl: z.string().nullable(),
-    footerLogoUrl: z.string().nullable(), websiteUrl: z.string(),
+    footerLogoUrl: z.string().nullable(), websiteUrl: z.string().nullable(),
   }),
   profileUrl: z.string().nullable(),
 });
