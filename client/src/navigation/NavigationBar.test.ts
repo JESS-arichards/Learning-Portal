@@ -2,7 +2,7 @@ import { Children, createElement, isValidElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ index: 0, menu: true, mobile: false, scrolled: false, collapsed: false, setters: [] as ReturnType<typeof vi.fn>[] }));
+const state = vi.hoisted(() => ({ pathname: '/', index: 0, menu: true, mobile: false, scrolled: false, collapsed: false, setters: [] as ReturnType<typeof vi.fn>[] }));
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useEffect: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('react', async (original) => ({
   },
 }));
 vi.mock('react-router', () => ({
-  useLocation: () => ({ pathname: '/', search: '' }),
+  useLocation: () => ({ pathname: state.pathname, search: '' }),
   Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => createElement('a', { href: to, ...props }, children),
 }));
 import { NavigationBar, type NavigationBarProps } from './NavigationBar';
@@ -39,9 +39,24 @@ function find(root: ReactNode, predicate: (props: Record<string, unknown>) => bo
   return null;
 }
 
-beforeEach(() => { state.index = 0; state.menu = true; state.mobile = false; state.scrolled = false; state.collapsed = false; state.setters = []; });
+beforeEach(() => { state.pathname = '/'; state.index = 0; state.menu = true; state.mobile = false; state.scrolled = false; state.collapsed = false; state.setters = []; });
 
 describe('shared navigation', () => {
+  it('updates portal/page text on route changes while preserving the logo and home destination', () => {
+    state.pathname = '/parking';
+    const first = renderToStaticMarkup(find(NavigationBar({ ...defaults, application: 'apps' }), (props) => props.className === 'jess-nav-brand'));
+    expect(first).toContain('Applications Portal - Parking');
+    expect(first).toContain('src="/logo.svg"');
+    expect(first).toContain('href="/"');
+    state.index = 0; state.pathname = '/streaming';
+    const second = renderToStaticMarkup(find(NavigationBar({ ...defaults, application: 'apps' }), (props) => props.className === 'jess-nav-brand'));
+    expect(second).toContain('Applications Portal - Streaming');
+    expect(second).not.toContain('Applications Portal - Parking');
+    state.index = 0; state.pathname = '/classes';
+    const learning = renderToStaticMarkup(find(NavigationBar({ ...defaults, application: 'learn' }), (props) => props.className === 'jess-nav-brand'));
+    expect(learning).toContain('Learning Portal - My Classes');
+    expect(learning).not.toContain('Test app');
+  });
   it('enables the navigation shield after scrolling or opening mobile navigation', () => {
     expect(NavigationBar(defaults).props.className).not.toContain('is-scrolled');
     state.index = 0;

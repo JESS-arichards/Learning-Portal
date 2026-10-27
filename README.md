@@ -353,6 +353,10 @@ Missing avatars use the Portal's first/last-name initials; failed image loads ar
 reported rather than introducing a different local logo or branding configuration.
 
 The header now uses the central application name/logo, avatar and account destinations.
+The logo remains centrally branded; the text beside it follows the current page:
+**Learning Portal - My Timetable**, **Learning Portal - My Classes**, or
+**Learning Portal - Administration**. This updates on navigation without a reload
+and does not change central branding settings.
 Above 1,400px, the same collapsible **Applications Portal left sidebar** appears,
 with **Learning Portal** expanded to show **My timetable**, **My classes** for staff/admins
 and **Learning Portal admin** for **Full Admin / Learn Admin only**. Other application

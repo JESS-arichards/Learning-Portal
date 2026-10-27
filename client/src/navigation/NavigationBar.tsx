@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { Link, useLocation } from 'react-router';
 import { CarFront, Info, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, ShieldCheck, UserRound, X } from 'lucide-react';
 import './navigation.css';
+import { navigationTitle } from './pageTitle';
 
 export interface NavigationUser {
   displayName: string;
@@ -11,6 +12,7 @@ export interface NavigationUser {
 
 export interface NavigationBarProps {
   appName: string;
+  application?: 'apps' | 'learn';
   brand: ReactNode;
   navigation: ReactNode;
   mobileNavigation: ReactNode;
@@ -67,9 +69,10 @@ function ApplicationInfo({ appName, user }: { appName: string; user?: Navigation
 export function NavigationBar({
   appName, brand, navigation, mobileNavigation, actions, mobileActions, user, avatar, support,
   profileUrl, adminUrl, accountItems, parkingReleaseUrl, parkingBay, signOut,
-  desktopSidebar = false,
+  desktopSidebar = false, application,
 }: NavigationBarProps) {
   const location = useLocation();
+  const title = application ? navigationTitle(application, location.pathname) : appName;
   const id = useId();
   const menuId = `${id}-account`;
   const mobileId = `${id}-navigation`;
@@ -177,8 +180,8 @@ export function NavigationBar({
   return (
     <header className={`jess-navigation${scrolled || mobileOpen ? ' is-scrolled' : ''}${desktopSidebar ? ' jess-navigation--sidebar' : ''}${desktopSidebar && sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>
       <nav className="jess-nav-bar" aria-label="Main">
-        <Link to="/" className="jess-nav-brand" aria-label={`${appName} home`} onClick={() => { setMobileOpen(false); setMenuOpen(false); }}>
-          {brand}<span>{appName}</span>
+        <Link to="/" className="jess-nav-brand" aria-label={`${title} home`} title={title} onClick={() => { setMobileOpen(false); setMenuOpen(false); }}>
+          {brand}<span>{title}</span>
         </Link>
         {!desktopSidebar && <ul className="jess-nav-links">{navigation}</ul>}
         <div className="jess-nav-actions">{actions}</div>
