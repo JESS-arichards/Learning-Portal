@@ -6,8 +6,9 @@
 }
 .modal {
   width: min(720px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto;
-  padding: clamp(20px, 4vw, 32px); background: var(--glass-bg-strong); animation: portal-modal-pop .2s ease-out;
+  padding: clamp(20px, 4vw, 32px); animation: portal-modal-pop .2s ease-out;
 }
+.modal.glass { background: var(--glass-bg-strong); }
 .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .modal-header h2 { margin: 0; }
 .portal-support-dialog {
@@ -45,7 +46,7 @@
 @keyframes portal-modal-fade { from { opacity: 0; transform: translateY(6px); } }
 @keyframes portal-modal-pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .portal-support-dialog { background: var(--brand-deep); }
+  .modal.glass { background: var(--brand-deep); }
 }
 @media (max-width: 600px) {
   .modal-backdrop { place-items: end stretch; padding: 0; }
