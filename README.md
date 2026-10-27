@@ -399,24 +399,33 @@ this app's test suite. Profile and central user administration link back to Appl
 ## Period types and multi-day periods
 
 In **Learning Portal admin > Day structure**, Full Admin and Learn Admin users can
-add, rename and remove period types. Each type has **Lesson** (schedulable) or
-**Break** (not schedulable) behaviour. Both the existing-period Type dropdown and
-the new-period dropdown use this list. Types used by periods cannot be removed;
-reassign those periods first. A type cannot be changed to Break while its periods
-are used by lessons.
+use **Add type** to open a dialog and enter a type name and **Lesson**
+(schedulable) or **Break** (not schedulable) behaviour. **Save type** commits
+immediately to the database and updates both period Type dropdowns. Types have
+compact read-only summaries with edit/delete icons; editing uses the same dialog.
+Types used by periods cannot be removed, and types used by timetable lessons
+cannot be edited.
 
-Use **Add a period** to enter a name, type and times, then choose the current day,
-selected days (including weekends), or **All week (Monday-Friday)**. Each selected
-day gets an independent period with identical details. Existing periods are kept;
-if any selected day overlaps or the weekly 140-period limit is exceeded, nothing
-is added. Changes remain drafts until **Save whole week**; **Discard edits**
-restores both periods and type options.
+The new-period row contains name, type, start/end times, a **Days** multi-select
+dropdown and a **save icon**. Choose one or more days (including weekends), or use
+**All week (Monday-Friday)** inside the dropdown. Each selected day gets an
+independent period with identical details. Saving commits the new period and all
+pending existing-period edits/deletions across days in one transaction. Leave the
+new-period name blank to save edits only. **Discard edits** restores saved periods;
+it does not undo already committed type changes. There is no Save whole week button.
+
+Periods referenced by any timetable lesson are locked against all edits and
+deletion in both the UI and API, including name, times, day and type. Remove or
+reschedule the lessons first. If any selected day overlaps, a used period was
+changed, or the weekly 140-period limit is exceeded, nothing is committed.
 
 The structure and types are saved atomically in the existing `structure` JSON
 document in `dbo.LearningDocuments`. Existing array-only documents load with the
 original Lesson/Break options and are upgraded on save. No SQL schema migration
 or new Azure settings are required. The structure API accepts `{ slots, periodTypes }`;
 legacy slot-array requests retain the currently saved type list.
+`PUT /api/admin/period-types` independently commits the type list against the
+current persisted periods without committing any unsaved period edits.
 
 ## Validation
 

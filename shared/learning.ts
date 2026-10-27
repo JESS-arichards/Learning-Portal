@@ -150,6 +150,19 @@ export const lessonSchema = lessonInputSchema.extend({
 });
 export type Lesson = z.infer<typeof lessonSchema>;
 export interface Snapshot { classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[] }
+export function validateStructureChange(current: Snapshot, next: Pick<Snapshot, 'slots' | 'periodTypes'>): void {
+  const used = new Set(current.lessons.flatMap((lesson) => lesson.slotIds));
+  for (const slot of current.slots.filter((slot) => used.has(slot.id))) {
+    const updated = next.slots.find((item) => item.id === slot.id);
+    const type = current.periodTypes.find((type) => type.id === periodTypeId(slot));
+    const nextType = next.periodTypes.find((type) => type.id === periodTypeId(slot));
+    if (!updated || updated.day !== slot.day || updated.name !== slot.name || updated.start !== slot.start
+      || updated.end !== slot.end || updated.kind !== slot.kind || periodTypeId(updated) !== periodTypeId(slot)
+      || type?.name !== nextType?.name || type?.kind !== nextType?.kind) {
+      throw new Error(`${DAYS[slot.day]} / ${slot.name} is used by timetable lessons and cannot be edited or deleted. Remove or reschedule those lessons first.`);
+    }
+  }
+}
 export interface ImportPreview {
   classes: LearningClass[];
   rowCount: number;

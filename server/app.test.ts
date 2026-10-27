@@ -207,6 +207,58 @@ describe('authenticated learning API', () => {
     expect(saveStructure).not.toHaveBeenCalled();
     expect(state).toEqual(seed);
   });
+  it.each([
+    { field: 'name', value: 'Renamed' }, { field: 'start', value: '08:05' },
+    { field: 'end', value: '08:55' }, { field: 'day', value: 2 },
+  ])('locks the $field of a period already used by a lesson', async ({ field, value }) => {
+    current = user(10, ['Learn Admin']);
+    const slots = seed.slots.map((slot) => slot.id === uuid(3) ? { ...slot, [field]: value } : slot);
+    const response = await call('/admin/structure', 'PUT', { slots, periodTypes: DEFAULT_PERIOD_TYPES });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('cannot be edited or deleted') });
+    expect(saveStructure).not.toHaveBeenCalled();
+  });
+  it('locks the type of used periods even when both types are schedulable', async () => {
+    current = user(10, ['Learn Admin']);
+    const custom = { id: uuid(30), name: 'Registration', kind: 'lesson' };
+    const slots = seed.slots.map((slot) => slot.id === uuid(3) ? { ...slot, typeId: custom.id } : slot);
+    expect((await call('/admin/structure', 'PUT', { slots, periodTypes: [...DEFAULT_PERIOD_TYPES, custom] })).status).toBe(409);
+    expect(saveStructure).not.toHaveBeenCalled();
+  });
+  it('saves pending period edits and new multi-day periods together, keeping used periods unchanged', async () => {
+    current = user(10, ['Learn Admin']);
+    const slots = [
+      ...seed.slots.filter((slot) => slot.id !== uuid(5)).map((slot) => slot.id === uuid(4) ? { ...slot, name: 'Edited period' } : slot),
+      ...[0, 1, 2, 3, 4].map((day) => ({ id: uuid(80 + day), day, name: 'New period', kind: 'lesson', start: '10:00', end: '11:00' })),
+    ];
+    const response = await call('/admin/structure', 'PUT', { slots, periodTypes: DEFAULT_PERIOD_TYPES });
+    expect(response.status).toBe(200);
+    expect(state.slots).toEqual(slots);
+    expect(state.lessons).toEqual(seed.lessons);
+  });
+  it('saves types immediately without changing the saved periods and enforces admin access', async () => {
+    const type = { id: uuid(30), name: 'Registration', kind: 'lesson' };
+    const types = [...DEFAULT_PERIOD_TYPES, type];
+    expect((await call('/admin/period-types', 'PUT', types)).status).toBe(403);
+    expect(saveStructure).not.toHaveBeenCalled();
+    current = user(10, ['Learn Admin']);
+    expect((await call('/admin/period-types', 'PUT', types)).status).toBe(200);
+    expect(state.periodTypes).toEqual(types);
+    expect(state.slots).toEqual(seed.slots);
+    expect((await (await call('/learning')).json()).periodTypes).toEqual(types);
+    expect((await call('/admin/period-types', 'PUT', [...types, { ...type, id: uuid(31) }])).status).toBe(400);
+    expect(state.periodTypes).toEqual(types);
+  });
+  it('edits unused types but refuses editing types used by lessons or deleting types in use', async () => {
+    current = user(10, ['Full Admin']);
+    expect((await call('/admin/period-types', 'PUT', [DEFAULT_PERIOD_TYPES[0]])).status).toBe(409);
+    const renamed = DEFAULT_PERIOD_TYPES.map((type) => type.id === 'lesson' ? { ...type, name: 'Renamed' } : type);
+    expect((await call('/admin/period-types', 'PUT', renamed)).status).toBe(409);
+    const editedBreak = DEFAULT_PERIOD_TYPES.map((type) => type.id === 'break' ? { ...type, name: 'Lunch' } : type);
+    expect((await call('/admin/period-types', 'PUT', editedBreak)).status).toBe(200);
+    expect(state.periodTypes).toEqual(editedBreak);
+    expect(state.lessons).toEqual(seed.lessons);
+  });
   it('protects lesson file downloads by live class membership', async () => {
     current = user(22, ['Student']);
     expect((await call(`/lessons/${uuid(6)}/files/${uuid(7)}`)).status).toBe(404);

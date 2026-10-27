@@ -16,7 +16,7 @@ import { previewClasses, CSV_HEADERS } from './importClasses.js';
 import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
-import { canManage, classKey, lessonInputSchema, dayStructureSchema, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { canManage, classKey, lessonInputSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
 
 const idSchema = z.string().uuid();
 function id(value: unknown) { return idSchema.parse(value); }
@@ -33,6 +33,10 @@ function lessonById(data: Snapshot, lessonId: string) {
 }
 function checkSchedule(...args: Parameters<typeof validateSchedule>) {
   try { validateSchedule(...args); }
+  catch (error) { if (error instanceof Error) throw new HttpError(409, error.message); throw error; }
+}
+function checkStructureChange(...args: Parameters<typeof validateStructureChange>) {
+  try { validateStructureChange(...args); }
   catch (error) { if (error instanceof Error) throw new HttpError(409, error.message); throw error; }
 }
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 0 } });
@@ -131,12 +135,31 @@ export function createApp() {
     const structure = await transaction(async (tx) => {
       const data = await snapshot(tx);
       const next = dayStructureSchema.parse(Array.isArray(req.body) ? { slots: req.body, periodTypes: data.periodTypes } : req.body);
+      checkStructureChange(data, next);
       for (const lesson of data.lessons) checkSchedule(lesson, data.lessons, data.classes, next.slots, lesson.id);
       await saveStructure(tx, next);
       return next;
     });
     logger.info({ actorId: req.user!.id, periods: structure.slots.length, types: structure.periodTypes.length }, 'Learning week structure updated');
     res.json(Array.isArray(req.body) ? structure.slots : structure);
+  });
+  api.put('/admin/period-types', requireAdmin, async (req, res) => {
+    const periodTypes = periodTypesSchema.parse(req.body);
+    const structure = await transaction(async (tx) => {
+      const current = await snapshot(tx);
+      const slots = current.slots.map((slot) => {
+        const type = periodTypes.find((type) => type.id === periodTypeId(slot));
+        if (!type) throw new HttpError(409, 'Types used by periods cannot be removed. Reassign or remove those periods first.');
+        return { ...slot, kind: type.kind };
+      });
+      const next = dayStructureSchema.parse({ slots, periodTypes });
+      checkStructureChange(current, next);
+      for (const lesson of current.lessons) checkSchedule(lesson, current.lessons, current.classes, next.slots, lesson.id);
+      await saveStructure(tx, next);
+      return next;
+    });
+    logger.info({ actorId: req.user!.id, types: periodTypes.length }, 'Learning period types updated');
+    res.json(structure);
   });
   async function writeLesson(req: express.Request, res: express.Response) {
     const input = lessonInputSchema.parse(req.body);
