@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { FileUp, ShieldCheck } from 'lucide-react';
-import type { Snapshot, ImportPreview } from '../../shared/learning';
+import { FileUp, Plus, ShieldCheck } from 'lucide-react';
+import type { Snapshot, ImportPreview, LearningClass } from '../../shared/learning';
 import { api, errorMessage, fileBody } from './api';
 import { DayStructure } from './DayStructure';
+import { ClassEditor } from './ClassEditor';
 function ClassImport({ data, refresh }: { data: Snapshot; refresh: () => Promise<void> }) {
+  const [editor, setEditor] = useState<{ classroom: LearningClass | null } | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -29,7 +31,9 @@ function ClassImport({ data, refresh }: { data: Snapshot; refresh: () => Promise
     finally { setBusy(false); }
   }
   return <section className="panel">
-    <div className="section-heading"><div><p className="eyebrow">CLASS DIRECTORY</p><h2>Import your classes</h2></div><FileUp size={24} /></div>
+    <div className="section-heading"><div><p className="eyebrow">CLASS DIRECTORY</p><h2>Manage your classes</h2></div><button type="button" className="btn secondary" disabled={busy} onClick={() => setEditor({ classroom: null })}><Plus size={16} /> Create class</button></div>
+    <p className="muted">Create a class manually, edit an existing class below, or upload a CSV.</p>
+    <h3><FileUp size={18} /> Import classes</h3>
     <p className="muted">Upload one row per class / teacher / student. Teachers must match active central Staff accounts. Students are enrolled by email and do not need an account yet. Parent uploads and child links are managed only in Applications Portal. Class Name + Year Group + Division identifies a class; importing it replaces its teacher and student roster, while keeping its lessons.</p>
     <a className="text-button" href="/api/admin/template.csv">Download CSV template</a>
     <label className="upload-field">Class data (.csv, maximum 2 MB / 5,000 rows)<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null); setNotice(''); setError(''); }} /></label>
@@ -44,7 +48,8 @@ function ClassImport({ data, refresh }: { data: Snapshot; refresh: () => Promise
     {error && <p role="alert" className="alert error">{error}</p>}
     {notice && <p role="status" className="alert success">{notice}</p>}
     <h3>Current classes ({data.classes.length})</h3>
-    <div className="table-scroll"><table><thead><tr><th>Class / year / division</th><th>Teacher</th><th>Students</th><th>Actions</th></tr></thead><tbody>{data.classes.map((c) => <tr key={c.id}><td><strong>{c.name}</strong><br /><span className="muted">{c.yearGroup} / {c.division}</span></td><td>{c.teachers.map((t) => t.displayName).join(', ')}</td><td>{c.students.length}</td><td><button className="text-button danger" disabled={busy} onClick={() => void removeClass(c.id)}>Delete</button></td></tr>)}</tbody></table></div>
+    <div className="table-scroll"><table><thead><tr><th>Class / year / division</th><th>Teacher</th><th>Students</th><th>Actions</th></tr></thead><tbody>{data.classes.map((c) => <tr key={c.id}><td><strong>{c.name}</strong><br /><span className="muted">{c.yearGroup} / {c.division}</span></td><td>{c.teachers.map((t) => t.displayName).join(', ')}</td><td>{c.students.length}</td><td><div className="class-actions"><button className="text-button" disabled={busy} onClick={() => setEditor({ classroom: c })} aria-label={`Edit class ${c.name}`}>Edit</button><button className="text-button danger" disabled={busy} onClick={() => void removeClass(c.id)}>Delete</button></div></td></tr>)}</tbody></table></div>
+    {editor && <ClassEditor classroom={editor.classroom} onClose={() => setEditor(null)} onSaved={async () => { await refresh(); setPreview(null); setNotice('Class saved.'); }} />}
   </section>;
 }
 export function Admin({ data, refresh, portalUrl }: { data: Snapshot; refresh: () => Promise<void>; portalUrl: string | null }) {
@@ -52,7 +57,7 @@ export function Admin({ data, refresh, portalUrl }: { data: Snapshot; refresh: (
   return <>
     <div className="page-heading"><div><p className="eyebrow">LEARNING PORTAL ADMINISTRATION</p><h1>Set learning in motion</h1><p className="muted">Manage classes and shape the school week.</p></div><div className="heading-icon"><ShieldCheck /></div></div>
     <div className="admin-note panel"><ShieldCheck size={20} /><p>User accounts, activation, Learn Admin roles, branding and parent links are managed centrally in Applications Portal.{portalUrl && <> <a href={new URL('/admin/users', portalUrl).href} target="_blank" rel="noopener noreferrer">Open central administration</a> (Full Admin required).</>}</p></div>
-    <div className="segmented"><button className={tab === 'classes' ? 'selected' : ''} onClick={() => setTab('classes')}>Class imports</button><button className={tab === 'structure' ? 'selected' : ''} onClick={() => setTab('structure')}>Day structure</button></div>
+    <div className="segmented"><button className={tab === 'classes' ? 'selected' : ''} onClick={() => setTab('classes')}>Classes</button><button className={tab === 'structure' ? 'selected' : ''} onClick={() => setTab('structure')}>Day structure</button></div>
     {tab === 'classes' ? <ClassImport data={data} refresh={refresh} /> : <DayStructure data={data} refresh={refresh} />}
   </>;
 }

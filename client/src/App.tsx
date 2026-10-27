@@ -80,7 +80,6 @@ export function App() {
         <Route path="/admin" element={isAdmin(user) ? <Admin data={data} refresh={refresh} portalUrl={config.profileUrl} /> : <Navigate to="/" replace />} />
         <Route path="*" element={<section className="empty panel"><h1>Page not found</h1><NavLink to="/">Go to my timetable</NavLink></section>} />
       </Routes>}
-      <footer className="app-footer">{config.branding.footerLogoUrl && <img src={config.branding.footerLogoUrl} alt={config.branding.organisationName} />}<span>{config.branding.organisationName}</span>{config.branding.websiteUrl && <a href={config.branding.websiteUrl} target="_blank" rel="noopener noreferrer">School website</a>}</footer>
     </main></div>
   </BrowserRouter>;
 }

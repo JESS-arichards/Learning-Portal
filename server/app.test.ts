@@ -83,6 +83,88 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  const manual = {
+    name: 'Science', yearGroup: '7', division: 'Secondary',
+    teachers: [{ displayName: 'Science Teacher', email: 'user10@school.test' }],
+    students: [{ displayName: 'Pending Student', email: 'pending@school.test' }],
+  };
+  it.each(['Learn Admin', 'Full Admin'])('validates and creates a manual class with pending students as %s', async (role) => {
+    current = user(10, [role]);
+    const preview = await call('/admin/classes/validate', 'POST', manual);
+    expect(preview.status).toBe(200);
+    const details = await preview.json();
+    expect(details.errors).toEqual([]);
+    expect(details.warnings[0].message).toContain('pending@school.test');
+    expect(save).not.toHaveBeenCalled();
+    const response = await call('/admin/classes', 'POST', manual);
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.classroom).toMatchObject({ name: 'Science', teachers: [{ ...person(10), displayName: 'Science Teacher' }], students: manual.students });
+    expect(state.classes).toHaveLength(3);
+    expect(state.lessons).toEqual(seed.lessons);
+    current = { ...user(99, ['Student']), email: 'pending@school.test' };
+    expect((await (await call('/learning')).json()).classes.map((c: { name: string }) => c.name)).toEqual(['Science']);
+  });
+  it.each(['Staff', 'Student', 'Parent'])('denies manual class changes to %s', async (role) => {
+    current = user(10, [role]);
+    for (const [path, method] of [['/admin/classes', 'POST'], [`/admin/classes/${uuid(1)}`, 'PUT'], ['/admin/classes/validate', 'POST']]) {
+      expect((await call(path, method, manual)).status).toBe(403);
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('updates all class details while retaining the class ID, lessons and files', async () => {
+    current = user(10, ['Learn Admin']);
+    vi.mocked(findUsers).mockImplementation(async (emails) => [user(11, ['Staff']), user(22, ['Student'])].filter((u) => emails.includes(u.email)));
+    const input = {
+      name: 'Renamed Maths', yearGroup: '9', division: 'Primary',
+      teachers: [{ displayName: 'New Teacher', email: ' USER11@school.test ' }],
+      students: [{ displayName: 'New Student', email: 'USER22@school.test' }],
+    };
+    const response = await call(`/admin/classes/${uuid(1)}`, 'PUT', input);
+    expect(response.status).toBe(200);
+    expect(state.classes.find((c) => c.id === uuid(1))).toMatchObject({
+      name: 'Renamed Maths', yearGroup: '9', division: 'Primary',
+      teachers: [{ id: 11, email: 'user11@school.test', displayName: 'New Teacher' }],
+      students: [{ email: 'user22@school.test', displayName: 'New Student' }],
+    });
+    expect(state.lessons).toEqual(seed.lessons);
+    current = user(10, ['Staff']);
+    expect((await (await call('/learning')).json()).classes).toEqual([]);
+    current = user(11, ['Staff']);
+    expect((await (await call('/learning')).json()).lessons).toEqual(seed.lessons);
+  });
+  it('rejects duplicate class identity and unknown edit IDs without overwriting classes', async () => {
+    current = user(10, ['Learn Admin']);
+    const duplicate = { ...manual, name: ' MATHS ', yearGroup: '7', division: 'secondary' };
+    expect((await call('/admin/classes', 'POST', duplicate)).status).toBe(409);
+    expect((await call(`/admin/classes/${uuid(2)}`, 'PUT', duplicate)).status).toBe(409);
+    expect((await call(`/admin/classes/${uuid(99)}`, 'PUT', manual)).status).toBe(404);
+    expect(save).not.toHaveBeenCalled();
+    expect(state.classes).toEqual(seed.classes);
+  });
+  it('revalidates staff and student accounts on save, rejecting invalid or duplicate rosters', async () => {
+    current = user(10, ['Learn Admin']);
+    expect((await call('/admin/classes/validate', 'POST', manual)).status).toBe(200);
+    vi.mocked(findUsers).mockResolvedValue([{ ...user(10, ['Staff']), isActive: false }]);
+    expect((await call('/admin/classes', 'POST', manual)).status).toBe(400);
+    vi.mocked(findUsers).mockResolvedValue([user(10, ['Staff']), { ...user(20, ['Parent']), email: 'pending@school.test' }]);
+    expect((await call('/admin/classes', 'POST', manual)).status).toBe(400);
+    expect((await call('/admin/classes', 'POST', { ...manual, students: [] })).status).toBe(400);
+    expect((await call('/admin/classes', 'POST', { ...manual, teachers: [...manual.teachers, ...manual.teachers] })).status).toBe(400);
+    expect((await call('/admin/classes', 'POST', { ...manual, students: [...manual.students, { ...manual.students[0], email: 'PENDING@school.test' }] })).status).toBe(400);
+    expect(save).not.toHaveBeenCalled();
+  });
+  it.each(['teacher', 'student'])('rejects roster edits that cause a shared %s timetable clash', async (shared) => {
+    current = user(10, ['Learn Admin']);
+    state.lessons.push({ ...seed.lessons[0], id: uuid(90), classId: uuid(2) });
+    vi.mocked(findUsers).mockImplementation(async (emails) => [user(10, ['Staff']), user(11, ['Staff']), user(22, ['Student'])].filter((u) => emails.includes(u.email)));
+    const input = { ...manual, teachers: [person(shared === 'teacher' ? 11 : 10)], students: shared === 'student' ? [person(22)] : manual.students };
+    const response = await call(`/admin/classes/${uuid(1)}`, 'PUT', input);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('Timetable clash') });
+    expect(save).not.toHaveBeenCalled();
+    expect(state.classes).toEqual(seed.classes);
+  });
   it('serves central images same-origin and exposes only the signed-in user avatar', async () => {
     vi.mocked(platformImage).mockResolvedValue({ data: Buffer.from('image'), contentType: 'image/png' });
     const logo = await call('/branding/assets/logo', 'GET', undefined, false);

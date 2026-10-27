@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { parse } from 'csv-parse/sync';
-import { classKey, emailSchema, normaliseEmail, type User, type Person, type Student, type LearningClass, type ImportPreview } from '../shared/learning.js';
+import { classKey, emailSchema, normaliseEmail, type ClassInput, type User, type Person, type Student, type LearningClass, type ImportPreview } from '../shared/learning.js';
 import { HttpError } from './errors.js';
 
 export const CSV_HEADERS = ['Class Name', 'Teacher Display Name', 'Teacher Email', 'Student Display Name', 'Student Email', 'Year Group', 'Division'];
@@ -12,12 +12,23 @@ export async function previewClasses(csv: string, existing: LearningClass[], loo
     throw new HttpError(400, `CSV headers must be: ${CSV_HEADERS.join(',')}`);
   }
   if (records.length < 2 || records.length > 5001) throw new HttpError(400, 'Upload between 1 and 5,000 data rows.');
+  return previewRecords(records.slice(1), existing, lookup);
+}
+export function previewManualClass(input: ClassInput, lookup: (emails: string[]) => Promise<User[]>): Promise<ImportPreview> {
+  const rows = Array.from({ length: Math.max(input.teachers.length, input.students.length) }, (_, index) => {
+    const teacher = input.teachers[index % input.teachers.length];
+    const student = input.students[index % input.students.length];
+    return [input.name, teacher.displayName, teacher.email, student.displayName, student.email, input.yearGroup, input.division];
+  });
+  return previewRecords(rows, [], lookup);
+}
+async function previewRecords(records: string[][], existing: LearningClass[], lookup: (emails: string[]) => Promise<User[]>): Promise<ImportPreview> {
   const errors: ImportPreview['errors'] = [];
   const warnings: ImportPreview['warnings'] = [];
   const classes = new Map<string, LearningClass>();
   const users = new Map<string, User>();
   const seen = new Set<string>();
-  const emails = [...new Set(records.slice(1).flatMap((row) => [row[2], row[4]]).flatMap((value) => {
+  const emails = [...new Set(records.flatMap((row) => [row[2], row[4]]).flatMap((value) => {
     const result = emailSchema.safeParse(value);
     return result.success ? [result.data] : [];
   }))];
@@ -29,7 +40,7 @@ export async function previewClasses(csv: string, existing: LearningClass[], loo
     if (!user?.isActive || !user.roles.includes('Staff')) return null;
     return { id: user.id, email: normaliseEmail(user.email), displayName: name };
   }
-  for (const [index, row] of records.slice(1).entries()) {
+  for (const [index, row] of records.entries()) {
     const rowNumber = index + 2;
     if (row.length !== 7 || row.some((value) => !value || value.length > 320)) {
       errors.push({ row: rowNumber, message: 'All seven columns are required; values must be at most 320 characters.' }); continue;
@@ -64,5 +75,5 @@ export async function previewClasses(csv: string, existing: LearningClass[], loo
     if (!classroom.students.some((s) => s.email === student.email)) classroom.students.push(student);
     if (!studentUser) warnings.push({ row: rowNumber, message: `Student ${student.email} is not in the active central directory. Enrolment will be saved by email; access requires an active Student account with this email.` });
   }
-  return { classes: [...classes.values()], rowCount: records.length - 1, errors, warnings };
+  return { classes: [...classes.values()], rowCount: records.length, errors, warnings };
 }

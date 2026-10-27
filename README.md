@@ -338,8 +338,9 @@ Legacy Learning `/api/auth/entra` and `/api/auth/otp/*` endpoints return 410.
 
 Learning has **no branding editor, branding database or per-app theme configuration**.
 It reads **Applications Portal > Admin > Branding** at runtime for the organisation,
-primary/background/text colors, logo, icon, background image, footer logo and
-website link. Clearing a central asset or text override clears it in Learning too.
+primary/background/text colors, logo, icon and background image. Learning does not
+render a footer, organisation caption or bottom divider. Clearing a central asset
+or text override clears it in Learning too.
 Branding, navigation and avatar metadata reload on page load, learning-data refresh
 and browser focus. Accent contrast is derived from the primary colour using the
 same helper as Applications Portal.
@@ -395,6 +396,25 @@ The same sync command also copies the canonical branding color-token helper, sup
 dialog/report/modal/styles, build-metadata helper and their shared tests.
 Do not edit consumer navigation or color-token copies directly. Shared tests run with
 this app's test suite. Profile and central user administration link back to Applications Portal.
+
+## Manual class creation and editing
+
+Full Admin and Learn Admin users can use **Learning Portal admin > Classes >
+Create class**, or **Edit** beside a current class. Enter the class name, year group,
+division, and one or more teachers and students with display names and email addresses.
+Teachers are matched to active central Staff accounts; students are enrolled by
+normalized email and may be added before their accounts exist. Existing inactive
+or non-Student accounts cannot be enrolled as students.
+
+Select **Validate class** to check the roster without writing anything, review errors
+and pending-enrolment warnings, then **Save class**. Any edit invalidates the preview;
+saving repeats directory validation and checks timetable clashes before committing.
+Duplicate name/year group/division identities are rejected, not silently merged.
+Editing replaces the roster while preserving the class ID, lessons, links and files.
+Removed teachers/students lose access to that class unless another role or parent
+link independently grants it. Changes that introduce shared teacher/student clashes
+are rejected atomically. CSV import remains available and uses the same validation.
+No new SQL schema or Azure configuration is required.
 
 ## Period types and multi-day periods
 

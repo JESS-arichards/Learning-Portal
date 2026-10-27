@@ -64,6 +64,16 @@ export const classSchema = z.object({
   students: z.array(studentSchema).min(1),
 });
 export type LearningClass = z.infer<typeof classSchema>;
+export const classInputSchema = classSchema.omit({ id: true }).extend({
+  teachers: z.array(studentSchema).min(1).max(200),
+  students: z.array(studentSchema).min(1).max(5000),
+}).strict().superRefine((value, ctx) => {
+  for (const key of ['teachers', 'students'] as const) {
+    if (new Set(value[key].map((person) => person.email)).size !== value[key].length)
+      ctx.addIssue({ code: 'custom', message: `Duplicate ${key} email addresses are not allowed.`, path: [key] });
+  }
+});
+export type ClassInput = z.infer<typeof classInputSchema>;
 export const periodTypeSchema = z.object({
   id: z.union([z.literal('lesson'), z.literal('break'), z.string().uuid()]),
   name: z.string().trim().min(1).max(100),

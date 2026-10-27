@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { previewClasses, CSV_HEADERS } from './importClasses.js';
-import type { User } from '../shared/learning.js';
+import { previewClasses, previewManualClass, CSV_HEADERS } from './importClasses.js';
+import { classInputSchema, type User } from '../shared/learning.js';
 
 const teacher: User = { id: 1, displayName: 'Central teacher', email: 'teacher@school.test', isActive: true, sessionVersion: 0, roles: ['Staff'], studentEmails: [] };
 const student: User = { ...teacher, id: 2, displayName: 'Central student', email: 'student@school.test', roles: ['Student'] };
@@ -9,6 +9,19 @@ const csv = (...rows: string[]) => CSV_HEADERS.join(',') + '\r\n' + rows.join('\
 const lookup = async (emails: string[]) => [teacher, student].filter((u) => emails.includes(u.email));
 
 describe('class CSV import preview', () => {
+  it.each([[1, 3], [3, 1], [2, 3], [3, 2]])('validates manual rosters with %i teachers and %i students without losing members', async (teachers, students) => {
+    const staff = Array.from({ length: teachers }, (_, i) => ({ ...teacher, id: i + 10, email: `teacher${i}@school.test` }));
+    const input = classInputSchema.parse({
+      name: 'Manual class', yearGroup: '7', division: 'Secondary',
+      teachers: staff.map(({ displayName, email }) => ({ displayName, email })),
+      students: Array.from({ length: students }, (_, i) => ({ displayName: `Student ${i}`, email: `pending${i}@school.test` })),
+    });
+    const result = await previewManualClass(input, async () => staff);
+    expect(result.errors).toEqual([]);
+    expect(result.classes[0].teachers).toHaveLength(teachers);
+    expect(result.classes[0].students).toEqual(input.students);
+    expect(new Set(result.warnings.map((w) => w.message)).size).toBe(students);
+  });
   it('matches teacher IDs and stores student emails without user IDs, retaining supplied names', async () => {
     const result = await previewClasses('\ufeff' + csv(row), [], lookup);
     expect(result.errors).toEqual([]);

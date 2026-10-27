@@ -12,11 +12,11 @@ import { publicConfig, findUsers, navigationFor, platformImage } from './platfor
 import { createSsoRouter } from './sso.js';
 import { transaction, pool } from './db.js';
 import { snapshot, save, saveStructure, remove } from './repository.js';
-import { previewClasses, CSV_HEADERS } from './importClasses.js';
+import { previewClasses, previewManualClass, CSV_HEADERS } from './importClasses.js';
 import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
-import { canManage, classKey, lessonInputSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { canManage, classKey, classInputSchema, lessonInputSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
 
 const idSchema = z.string().uuid();
 function id(value: unknown) { return idSchema.parse(value); }
@@ -105,6 +105,31 @@ export function createApp() {
     const data = await snapshot();
     res.json(await previewClasses(req.file.buffer.toString('utf8'), data.classes, findUsers));
   });
+  api.post('/admin/classes/validate', requireAdmin, async (req, res) => {
+    res.json(await previewManualClass(classInputSchema.parse(req.body), findUsers));
+  });
+  async function writeClass(req: express.Request, res: express.Response) {
+    const input = classInputSchema.parse(req.body);
+    const classId = req.params.id ? id(req.params.id) : randomUUID();
+    const preview = await previewManualClass(input, findUsers);
+    if (preview.errors.length) throw new HttpError(400, preview.errors.map((error) => error.message).join(' '));
+    const classroom = preview.classes[0];
+    if (!classroom) throw new HttpError(400, 'Enter at least one valid teacher and student.');
+    const saved = { ...classroom, id: classId };
+    await transaction(async (tx) => {
+      const current = await snapshot(tx);
+      if (req.params.id && !current.classes.some((item) => item.id === classId)) throw new HttpError(404, 'Class not found.');
+      if (current.classes.some((item) => item.id !== classId && classKey(item) === classKey(saved)))
+        throw new HttpError(409, 'A class with this name, year group and division already exists. Edit that class instead.');
+      const classes = [...current.classes.filter((item) => item.id !== classId), saved];
+      for (const lesson of current.lessons) checkSchedule(lesson, current.lessons, classes, current.slots, lesson.id);
+      await save(tx, 'class', classId, saved);
+    });
+    logger.info({ actorId: req.user!.id, classId, teachers: saved.teachers.length, students: saved.students.length }, 'Learning class saved manually');
+    res.status(req.params.id ? 200 : 201).json({ classroom: saved, warnings: preview.warnings });
+  }
+  api.post('/admin/classes', requireAdmin, writeClass);
+  api.put('/admin/classes/:id', requireAdmin, writeClass);
   api.post('/admin/classes/import', requireAdmin, csvUpload.single('file'), async (req, res) => {
     if (!req.file) throw new HttpError(400, 'Choose a CSV file.');
     // Resolve live directory matches before taking the database lock.
