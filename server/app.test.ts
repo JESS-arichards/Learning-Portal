@@ -5,7 +5,7 @@ import sharp from 'sharp';
 
 vi.mock('./config.js', () => ({ config: {
   APPLICATIONS_PORTAL_URL: 'http://localhost:8080', PUBLIC_BASE_URL: 'http://localhost:5174',
-  SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: false,
+  SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: false, SQL_SERVERLESS_ENABLED: false,
 } }));
 vi.mock('./platform.js', () => ({
   platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(), platformImage: vi.fn(), navigationFor: vi.fn(),
@@ -16,10 +16,12 @@ vi.mock('./db.js', () => ({ transaction: vi.fn(async (work: (tx: object) => Prom
 vi.mock('./storage.js', () => ({ putFile: vi.fn(), readFileContent: vi.fn(), deleteFile: vi.fn(), checkStorage: vi.fn() }));
 
 import { createApp } from './app.js';
-import { platform, getUser, findUsers, platformImage, navigationFor } from './platform.js';
+import { platform, getUser, findUsers, platformImage, navigationFor, publicConfig } from './platform.js';
+import { pool } from './db.js';
 import { snapshot, save, saveStructure, remove } from './repository.js';
-import { readFileContent, putFile } from './storage.js';
+import { readFileContent, putFile, checkStorage } from './storage.js';
 import { HttpError } from './errors.js';
+import { config } from './config.js';
 import { CSV_HEADERS } from './importClasses.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -51,6 +53,7 @@ async function call(path: string, method = 'GET', body?: unknown, authenticated 
 }
 const draft = { classId: uuid(1), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)] };
 beforeEach(async () => {
+  config.SQL_SERVERLESS_ENABLED = false;
   await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not start');
@@ -83,6 +86,74 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('serves standalone liveness without SQL, storage, platform or authentication calls', async () => {
+    vi.clearAllMocks();
+    const response = await call('/live', 'GET', undefined, false);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok' });
+    for (const fn of [pool, checkStorage, publicConfig, getUser, platform]) expect(fn).not.toHaveBeenCalled();
+  });
+  it('gates dependent APIs and deep health until initialized, but keeps liveness available', async () => {
+    const readiness = { ready: false };
+    const waiting = createApp(readiness).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => waiting.once('listening', resolve));
+    const address = waiting.address();
+    if (!address || typeof address === 'string') throw new Error('Missing address');
+    const base = `http://127.0.0.1:${address.port}`;
+    vi.clearAllMocks();
+    try {
+      for (const path of ['/api/health', '/api/learning', '/api/config', '/api/auth/start']) {
+        const response = await fetch(base + path);
+        expect(response.status).toBe(503);
+        expect(response.headers.get('retry-after')).toBe('10');
+      }
+      const post = await fetch(base + '/api/admin/classes', { method: 'POST' });
+      expect(post.status).toBe(503);
+      expect((await fetch(base + '/api/live')).status).toBe(200);
+      for (const fn of [pool, checkStorage, publicConfig, getUser, platform, save]) expect(fn).not.toHaveBeenCalled();
+      readiness.ready = true;
+      expect((await fetch(base + '/api/me', { headers: { Cookie: cookie } })).status).toBe(200);
+    } finally { await new Promise<void>((resolve) => waiting.close(() => resolve())); }
+  });
+  it('retains the deep health dependency checks after initialization', async () => {
+    const query = vi.fn().mockResolvedValue({});
+    vi.mocked(pool).mockResolvedValueOnce({ request: () => ({ query }) } as unknown as Awaited<ReturnType<typeof pool>>);
+    const response = await call('/health', 'GET', undefined, false);
+    expect(response.status).toBe(200);
+    expect(query).toHaveBeenCalledWith('SELECT 1 AS ok');
+    expect(checkStorage).toHaveBeenCalledOnce();
+    expect(publicConfig).toHaveBeenCalledOnce();
+  });
+  it('keeps valid sessions through SQL and central outages, without retrying writes', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    config.SQL_SERVERLESS_ENABLED = true;
+    await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', resolve); });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing address');
+    url = `http://127.0.0.1:${address.port}`;
+    vi.mocked(snapshot).mockRejectedValueOnce({ originalError: { info: { number: 40613 } } });
+    const sql = await call('/learning');
+    expect(sql.status).toBe(503);
+    expect(sql.headers.get('retry-after')).toBe('10');
+    expect(sql.headers.get('set-cookie')).toBeNull();
+    vi.mocked(getUser).mockRejectedValueOnce(new HttpError(503, 'Central Portal is waking.'));
+    const central = await call('/me');
+    expect(central.status).toBe(503);
+    expect(central.headers.get('retry-after')).toBe('10');
+    expect(central.headers.get('set-cookie')).toBeNull();
+    expect((await call('/me')).status).toBe(200);
+    vi.mocked(save).mockRejectedValueOnce({ code: 'ESOCKET' });
+    const write = await call('/lessons', 'POST', draft);
+    expect(write.status).toBe(503);
+    expect(save).toHaveBeenCalledOnce();
+  });
+  it('preserves normal SQL runtime errors without serverless opt-in', async () => {
+    vi.mocked(snapshot).mockRejectedValueOnce({ number: 40613 });
+    const response = await call('/learning');
+    expect(response.status).toBe(500);
+    expect(response.headers.get('retry-after')).toBeNull();
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
   const manual = {
     name: 'Science', yearGroup: '7', division: 'Secondary',
     teachers: [{ displayName: 'Science Teacher', email: 'user10@school.test' }],

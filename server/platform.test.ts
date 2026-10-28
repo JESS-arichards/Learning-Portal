@@ -8,6 +8,13 @@ import { findUsers, getUser, platform, publicConfig, platformImage, navigationFo
 
 afterEach(() => vi.unstubAllGlobals());
 describe('central platform consumer', () => {
+  it('turns the central 15-second timeout into recoverable unavailability without retrying POST', async () => {
+    const fetch = vi.fn().mockRejectedValue(new DOMException('Timed out', 'TimeoutError'));
+    vi.stubGlobal('fetch', fetch);
+    await expect(platform('/learning/sso/exchange', 'POST', { code: 'one-use' })).rejects.toMatchObject({ status: 503 });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
   it('preserves the central parking label and account destinations', async () => {
     const navigation = {
       items: [], portalUrl: 'https://portal.school.test', learningUrl: 'https://learn.school.test',

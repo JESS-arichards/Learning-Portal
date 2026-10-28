@@ -10,6 +10,29 @@ const settings = {
   AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=https;AccountName=testaccount;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net',
 };
 describe('credential-only infrastructure configuration', () => {
+  it('leaves normal SQL unchanged unless serverless is explicitly enabled', () => {
+    const parsed = environmentSchema.parse(settings);
+    expect(parsed.SQL_SERVERLESS_ENABLED).toBe(false);
+    expect(sqlConfig(parsed).pool).toBeUndefined();
+    expect(sqlConfig(parsed).connectionTimeout).toBeUndefined();
+    for (const invalid of ['TRUE', '1', 'yes', '']) {
+      expect(environmentSchema.safeParse({ ...settings, SQL_SERVERLESS_ENABLED: invalid }).success).toBe(false);
+    }
+  });
+  it('uses zero idle minimum and 30-second idle timeout with either SQL credential format', () => {
+    const parsed = environmentSchema.parse({ ...settings, SQL_SERVERLESS_ENABLED: 'true' });
+    for (const value of [
+      parsed,
+      { ...parsed, SQL_CONNECTION_STRING: 'Server=other.test;Database=other;User ID=other;Password=test;Encrypt=false;TrustServerCertificate=true;Connection Timeout=60;Min Pool Size=5;' },
+    ]) {
+      expect(sqlConfig(value)).toMatchObject({
+        pool: { min: 0, idleTimeoutMillis: 30000 }, connectionTimeout: 15000,
+        options: { connectTimeout: 15000, maxRetriesOnTransientErrors: 0 },
+      });
+    }
+    expect(sqlConfig({ ...parsed, SQL_CONNECTION_STRING: 'Server=other.test;Database=other;User ID=other;Password=test;Encrypt=false;TrustServerCertificate=true;' }))
+      .toMatchObject({ server: 'other.test', database: 'other', user: 'other', options: { encrypt: false, trustServerCertificate: true } });
+  });
   it('requires explicit SQL credentials and preserves password whitespace', () => {
     const parsed = environmentSchema.parse(settings);
     expect(sqlConfig(parsed)).toMatchObject({

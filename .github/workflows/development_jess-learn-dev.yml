@@ -61,6 +61,25 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_28357B24212E41D194A619C20041224F }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_CFE0BAD08B7E4386ADDDD77C9E71A10F }}
 
+      - name: Configure development serverless mode and liveness
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_name='jess-learn-dev'
+          resource_group="$(az webapp list --query "[?name=='${app_name}'].resourceGroup" --output tsv)"
+          if [[ -z "$resource_group" || "$resource_group" == *$'\n'* ]]; then
+            echo "::error::Cannot uniquely find resource group for ${app_name}."
+            exit 1
+          fi
+          az webapp config appsettings set --resource-group "$resource_group" --name "$app_name" --settings SQL_SERVERLESS_ENABLED=true --output none
+          az webapp config set --resource-group "$resource_group" --name "$app_name" --generic-configurations '{"healthCheckPath":"/api/live"}' --output none
+          hostname="$(az webapp show --resource-group "$resource_group" --name "$app_name" --query defaultHostName --output tsv)"
+          if [[ -z "$hostname" || "$hostname" == "null" || "$hostname" == *$'\n'* ]]; then
+            echo "::error::Cannot find development webapp hostname."
+            exit 1
+          fi
+          echo "LEARNING_DEV_URL=https://${hostname}" >> "$GITHUB_ENV"
+
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
@@ -68,3 +87,12 @@ jobs:
           app-name: 'jess-learn-dev'
           slot-name: 'Production'
           package: .
+
+      - name: Verify development liveness and deep readiness
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 --retry 8 --retry-delay 5 --retry-max-time 120 --retry-connrefused --output /dev/null "${LEARNING_DEV_URL}/api/live"
+          # Deliberately wake SQL once per deployment; do not schedule this deep probe.
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 100 --retry 8 --retry-delay 10 --retry-max-time 240 --retry-connrefused --output /dev/null "${LEARNING_DEV_URL}/api/health"

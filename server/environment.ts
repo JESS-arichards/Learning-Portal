@@ -13,6 +13,7 @@ export const environmentSchema = z.object({
   SQL_PASSWORD: z.string().optional().transform((v) => v || undefined),
   SQL_ENCRYPT: z.enum(['true', 'false']).default('true'),
   SQL_TRUST_SERVER_CERTIFICATE: z.enum(['true', 'false']).default('false'),
+  SQL_SERVERLESS_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   AZURE_STORAGE_CONNECTION_STRING: z.string().trim().min(1).refine(
     (v) => /(?:^|;)AccountName=[^;]+(?:;|$)/i.test(v) && /(?:^|;)AccountKey=[^;]+(?:;|$)/i.test(v)
       && /(?:^|;)DefaultEndpointsProtocol=https(?:;|$)/i.test(v),

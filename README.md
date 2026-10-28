@@ -84,8 +84,10 @@ npm start
 Set `NODE_ENV=production` and all configuration through the hosting platform.
 The existing development Azure deployment workflow now uses `npm ci` and requires
 typecheck, tests and build. No credentials or example student data are committed.
-`GET /api/health` checks the learning database, central integration and private Blob
-container. Startup also refuses to serve the app if schema or storage initialization fails.
+`GET /api/live` checks only that this process can serve HTTP; it never queries SQL,
+the central Portal or Blob Storage. `GET /api/health` retains the deep learning database,
+central integration and private Blob container checks. By default startup refuses to
+serve the app if schema or storage initialization fails.
 
 ## Azure Web App setup (SQL login + storage access key)
 
@@ -95,7 +97,8 @@ Use a Linux Node.js **24 LTS** App Service, HTTPS Only enabled, minimum TLS 1.2,
 64-bit runtime and startup command **`npm start`**. Set Always On where the plan
 supports it. Disable App Service Authentication ("Easy Auth") unless a deliberate
 exception allows the app's public SSO start/callback endpoints: authentication is
-handled by Applications Portal. Configure the health-check path as `/api/health`.
+handled by Applications Portal. For normal SQL, keep the health-check path as
+`/api/health`; for auto-pausing development SQL, use `/api/live` as described below.
 The application binds to Azure's `PORT`; do not override it with the local Vite port.
 
 Set these in **Settings > Environment variables > App settings**, not in source control
@@ -116,6 +119,7 @@ when using slots.
 | `SQL_PASSWORD` | That SQL user's password |
 | `SQL_ENCRYPT` | `true` |
 | `SQL_TRUST_SERVER_CERTIFICATE` | `false` |
+| `SQL_SERVERLESS_ENABLED` | Optional `true` or `false`; default `false`. Enable only on a webapp using auto-pausing Azure SQL serverless. |
 | `AZURE_STORAGE_CONNECTION_STRING` | `DefaultEndpointsProtocol=https;AccountName=<account>;AccountKey=<key>;EndpointSuffix=core.windows.net` |
 | `AZURE_STORAGE_CONTAINER` | Private dedicated container, e.g. `learning-files` |
 
@@ -130,6 +134,65 @@ Set it as an **App setting** named `SQL_CONNECTION_STRING`; do not rely on Azure
 separately prefixed Connection strings settings. Managed-identity/Entra connection
 strings are rejected. Do not set `AZURE_STORAGE_ACCOUNT_URL`, managed-identity settings,
 `LOCAL_STORAGE_PATH` or `STORAGE_ALLOW_LOCAL_DISK` for Learning: those paths are not supported.
+
+### Optional development SQL serverless auto-pause
+
+Set **`SQL_SERVERLESS_ENABLED=true` on the Learning development Web App** in
+Settings > Environment variables > App settings. This is a per-webapp setting, not
+a SQL server setting or browser variable. Leave it absent or `false` on production
+and other provisioned-SQL webapps: their pool defaults and fail-fast startup remain
+unchanged. Only the exact strings `true` and `false` are accepted. Provision the fresh
+development database and configure its own SQL credentials; no data copy or special
+serverless migration is needed. The normal startup schema script still runs.
+The development GitHub Actions workflow automatically sets this flag and
+`healthCheckPath=/api/live` on **`jess-learn-dev` only**, after Azure login and before
+deployment. It discovers the resource group and fails if the app cannot be uniquely
+found; its identity needs permission to update that webapp's configuration. You must
+still supply the correct development SQL connection settings/credentials and other
+required app settings yourself. The workflow never changes SQL credentials, database
+names or other app settings. After deployment it performs bounded GET checks of
+liveness and deep health; the deliberate deep check can wake SQL.
+
+The four `SQL_SERVER` / `SQL_DATABASE` / `SQL_USER` / `SQL_PASSWORD` settings are used
+unless `SQL_CONNECTION_STRING` is set, in which case that entire string takes
+precedence (including encryption settings). Remove a stale connection string when
+switching to discrete settings. SQL username/password authentication remains mandatory;
+serverless mode does not enable Entra, managed identity or integrated authentication.
+Do not point development at the production database.
+
+In serverless mode, connection establishment retries only recognized transient SQL
+connection errors (including Azure SQL 40613), with exponential backoff and an
+approximately 90-second total wake budget per connection cycle. Login, permission and
+query errors are not retried. Pool minimum is forced to **0** with **30-second idle
+timeout**, including when settings come from a connection string. Failed connections
+are discarded and disconnected cached pools can reconnect. No application write or
+migration batch is automatically replayed. A failed/ambiguous save must be checked
+before the user resubmits; clients must not automatically retry POST/PUT/DELETE.
+
+The server listens immediately in this mode while initial connection readiness and
+transient Blob Storage readiness failures are retried. Startup intentionally waits
+persistently across transient outages (a 10-second delay between failed readiness
+cycles); this is distinct from the bounded 90-second connection wake budget of each
+pool cycle. No requests are replayed while waiting, and permanent failures still stop
+startup. Until schema and private storage
+initialization complete, dependent `/api` endpoints (including `/api/health` and auth)
+return **503 with `Retry-After: 10`**. `/api/live` remains available without touching any
+dependency. Permanent configuration errors or a failed migration remain fatal rather
+than silently enabling an incomplete app. After startup in serverless mode, transient SQL failures and
+central Portal outages return recoverable 503 responses with `Retry-After`, without
+clearing valid Learning sessions. The central Portal request timeout remains 15 seconds;
+timeouts do not trigger automatic SSO exchange/other POST retries.
+
+Set the development Azure **Health Check path to `/api/live`**, and change any uptime
+probes to use it. It reports process liveness, **not** database or application readiness.
+Keep deep `/api/health` for deliberate diagnostic checks: regularly polling it, real
+API traffic, database monitoring tools, other apps sharing the database, or open SQL
+sessions can wake SQL or prevent auto-pause. Avoid synthetic deep checks on a schedule
+if auto-pause is required. Always On can keep HTTP responsive without itself touching
+SQL when the probe uses `/api/live`. Monitor initialization failures, 503s, wake latency
+and Azure SQL sessions separately; do not treat a green liveness probe as proof that
+the application is ready. Auto-pause is also subject to Azure SQL's configured delay
+and eligibility restrictions.
 
 ### Database provisioning
 

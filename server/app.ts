@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import { z } from 'zod';
 import { config } from './config.js';
-import { HttpError, errorHandler, logger } from './errors.js';
+import { HttpError, createErrorHandler, logger } from './errors.js';
 import { requireUser, requireAdmin, signOut } from './auth.js';
 import { publicConfig, findUsers, navigationFor, platformImage } from './platform.js';
 import { createSsoRouter } from './sso.js';
@@ -42,7 +42,7 @@ function checkStructureChange(...args: Parameters<typeof validateStructureChange
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 0 } });
 const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 0 } });
 
-export function createApp() {
+export function createApp(readiness: { ready: boolean } = { ready: true }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -58,6 +58,11 @@ export function createApp() {
   app.use(cookieParser());
   app.use(express.json({ limit: '300kb' }));
   app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  app.get('/api/live', (_req, res) => res.json({ status: 'ok' }));
+  app.use('/api', (_req, _res, next) => {
+    if (!readiness.ready) throw new HttpError(503, 'Learning Portal is initializing. Please try again shortly.');
+    next();
+  });
   app.use('/api', (req, _res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('x-requested-with') !== 'learning-portal') {
       throw new HttpError(403, 'Invalid request origin.');
@@ -275,6 +280,6 @@ export function createApp() {
   const client = path.resolve('dist', 'client');
   app.use(express.static(client, { index: false }));
   app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => res.sendFile(path.join(client, 'index.html')));
-  app.use(errorHandler);
+  app.use(createErrorHandler(config.SQL_SERVERLESS_ENABLED));
   return app;
 }

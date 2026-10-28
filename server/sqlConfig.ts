@@ -3,6 +3,7 @@ import sql from 'mssql';
 export function sqlConfig(settings: {
   SQL_CONNECTION_STRING?: string; SQL_SERVER?: string; SQL_DATABASE?: string;
   SQL_USER?: string; SQL_PASSWORD?: string; SQL_ENCRYPT: string; SQL_TRUST_SERVER_CERTIFICATE: string;
+  SQL_SERVERLESS_ENABLED?: boolean;
 }): sql.config {
   const parsed: sql.config = settings.SQL_CONNECTION_STRING
     ? sql.ConnectionPool.parseConnectionString(settings.SQL_CONNECTION_STRING)
@@ -15,6 +16,12 @@ export function sqlConfig(settings: {
     || parsed.authentication && parsed.authentication.type !== 'default'
     || 'authentication_type' in parsed && parsed.authentication_type !== 'default') {
     throw new Error('Learning requires SQL username/password authentication with server and database specified. Managed identity and integrated authentication are not supported.');
+  }
+  if (settings.SQL_SERVERLESS_ENABLED) {
+    parsed.pool = { ...parsed.pool, min: 0, idleTimeoutMillis: 30000 };
+    parsed.connectionTimeout = 15000;
+    // Own the wake budget rather than nesting Tedious's independent login retries.
+    parsed.options = { ...parsed.options, connectTimeout: 15000, maxRetriesOnTransientErrors: 0 };
   }
   return parsed;
 }
