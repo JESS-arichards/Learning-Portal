@@ -1,5 +1,9 @@
 # Learning Portal
 
+On screens up to 600px wide, the shared navigation title wraps rather than
+truncating. The logo is capped at 80px wide and information/menu controls retain
+their touch targets. Longer titles can increase the header height.
+
 A separate remote-learning application built on the Applications Portal's central
 user directory, roles, branding, Entra configuration and shared navigation.
 React/Vite and an Express/TypeScript API deploy together as one Node.js 22+ service.
