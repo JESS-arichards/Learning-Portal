@@ -142,8 +142,9 @@ legend { padding: 0 8px; font-size: .9rem; }
 .lesson-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 20px; margin-bottom: 28px; }
 .managed-lesson { display: flex; flex-direction: column; }
 .managed-lesson .description { color: var(--text-muted); }
+.managed-lesson .lesson-resources { margin-bottom: 20px; }
 .lesson-icon { display: inline-flex; color: var(--brand-accent); margin-bottom: 18px; }
-.schedule-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+.schedule-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; margin-bottom: 12px; }
 .card-actions { display: flex; gap: 20px; align-items: center; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .roster { margin-top: 24px; }
 summary { cursor: pointer; font-weight: 600; }
