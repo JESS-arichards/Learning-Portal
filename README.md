@@ -3,6 +3,12 @@
 On screens up to 600px wide, the shared navigation title wraps rather than
 truncating. The logo is capped at 80px wide and information/menu controls retain
 their touch targets. Longer titles can increase the header height.
+Period configuration stacks fields on narrow phones and places save/delete actions
+on their own row, preventing native time inputs from overlapping action buttons.
+On screens up to 900px wide, the new-period Days selector occupies a full row below
+the time fields, and its dropdown stays within that row's width.
+Mobile period-type cards share equal widths and heights, with aligned 44px edit/delete
+buttons and wrapping names so longer labels do not change the card alignment.
 
 A separate remote-learning application built on the Applications Portal's central
 user directory, roles, branding, Entra configuration and shared navigation.

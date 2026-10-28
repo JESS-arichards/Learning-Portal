@@ -142,6 +142,7 @@ th { font-size: .7rem; color: var(--text-muted); letter-spacing: .03em; font-wei
 td { padding: 14px 12px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .structure-row { display: grid; grid-template-columns: 2fr 1.2fr 1fr 1fr 44px; gap: 14px; align-items: end; margin-bottom: 18px; }
 .structure-row label { margin-bottom: 0; }
+.structure-row input, .structure-row select { min-width: 0; max-width: 100%; }
 .class-details { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
 .class-person-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 44px; gap: 12px; align-items: end; margin-bottom: 18px; }
 .class-person-row label { margin-bottom: 0; }
@@ -180,10 +181,16 @@ input:disabled, select:disabled { opacity: .7; cursor: not-allowed; }
 @media (max-width: 900px) {
   .family-layout { grid-template-columns: 230px minmax(0, 1fr); gap: 24px; }
   .week-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
-  .structure-row { grid-template-columns: 1fr 1fr; }
+  .structure-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .period-add-row > .period-days-field { grid-column: 1 / -1; }
+  .period-days-options { max-width: 100%; }
+  .structure-row > .icon-button { grid-column: 1 / -1; justify-self: end; min-height: 44px; }
   .link-editor { grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
 }
 @media (max-width: 680px) {
+  .period-types { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; }
+  .period-types li { display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px; gap: 8px; width: 100%; }
+  .period-types .icon-button { width: 44px; height: 44px; }
   .class-details { grid-template-columns: 1fr; }
   .class-person-row { grid-template-columns: minmax(0, 1fr) 44px; }
   .class-person-row label:first-child { grid-column: 1 / -1; }
@@ -210,4 +217,7 @@ input:disabled, select:disabled { opacity: .7; cursor: not-allowed; }
   .structure-row .icon-button { width: 44px; }
   .resource { flex-wrap: wrap; }
   .resource span { min-width: 75%; }
+}
+@media (max-width: 480px) {
+  .structure-row > label, .structure-row > .period-days-field { grid-column: 1 / -1; }
 }
