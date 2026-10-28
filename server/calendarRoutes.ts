@@ -8,6 +8,7 @@ import { HttpError, logger } from './errors.js';
 import { deleteFile } from './storage.js';
 import { academicCalendarSchema, EMPTY_CALENDAR, previewSchedule } from '../shared/calendar.js';
 import { canManage, lessonInputSchema } from '../shared/learning.js';
+import { formatDate } from '../shared/dateFormatting.js';
 
 export function createCalendarRouter() {
   const router = Router();
@@ -24,14 +25,25 @@ export function createCalendarRouter() {
     const calendar = academicCalendarSchema.parse(req.body);
     await transaction(async (tx) => {
       const current = await snapshot(tx);
+      const conflicts: string[] = [];
       for (const lesson of current.lessons.filter((lesson) => lesson.schedule)) {
+        const label = `"${lesson.name}" (${current.classes.find((item) => item.id === lesson.classId)?.name ?? lesson.classId})`;
         let next;
         try { next = previewSchedule(calendar, current.slots, lesson.slotIds, lesson.schedule!); }
-        catch (error) { if (error instanceof Error) throw new HttpError(409, `Calendar would invalidate "${lesson.name}": ${error.message}`); throw error; }
+        catch (error) {
+          if (!(error instanceof Error)) throw error;
+          conflicts.push(`${label}, starting ${formatDate(lesson.schedule!.startDate)}: ${error.message}`);
+          continue;
+        }
         const key = (value: { date: string; slotId: string }) => `${value.date}/${value.slotId}`;
-        if (JSON.stringify(next.occurrences.map(key).sort()) !== JSON.stringify((lesson.occurrences ?? []).map(key).sort()))
-          throw new HttpError(409, `Calendar changes would alter "${lesson.name}". Reschedule or remove that lesson first (cancel its Teams meetings before doing so).`);
+        const existing = lesson.occurrences ?? [];
+        if (JSON.stringify(next.occurrences.map(key).sort()) !== JSON.stringify(existing.map(key).sort())) {
+          const changed = existing.find((item) => !next.occurrences.some((other) => key(item) === key(other)))
+            ?? next.occurrences.find((item) => !existing.some((other) => key(item) === key(other)));
+          conflicts.push(`${label}: scheduled dates would change${changed ? ` on ${formatDate(changed.date)}` : ''}.`);
+        }
       }
+      if (conflicts.length) throw new HttpError(409, `Calendar changes would affect existing lessons: ${conflicts.join(' ')} Reschedule or remove the affected lessons first; cancel their Teams meetings before doing so.`);
       await saveCalendar(tx, calendar);
     });
     logger.info({ actorId: req.user!.id }, 'Academic calendar saved');

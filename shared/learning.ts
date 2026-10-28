@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { PortalMenuItem } from './portalMenu.js';
 import { recurrenceSchema, occurrenceSchema, type AcademicCalendar, type Occurrence } from './calendar.js';
+import { uuidSchema } from './identifiers.js';
 
 export const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 export function normaliseEmail(email: string): string { return email.trim().toLowerCase(); }
@@ -57,7 +58,7 @@ export const navigationSchema = z.object({
 });
 export type PortalNavigation = z.infer<typeof navigationSchema>;
 export const classSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   name: z.string().trim().min(1).max(200),
   yearGroup: z.string().trim().min(1).max(50),
   division: z.string().trim().min(1).max(100),
@@ -76,7 +77,7 @@ export const classInputSchema = classSchema.omit({ id: true }).extend({
 });
 export type ClassInput = z.infer<typeof classInputSchema>;
 export const periodTypeSchema = z.object({
-  id: z.union([z.literal('lesson'), z.literal('break'), z.string().uuid()]),
+  id: z.union([z.literal('lesson'), z.literal('break'), uuidSchema]),
   name: z.string().trim().min(1).max(100),
   kind: z.enum(['lesson', 'break']),
 });
@@ -93,11 +94,11 @@ export const periodTypesSchema = z.array(periodTypeSchema).min(1).max(30).superR
 });
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm (24-hour time).');
 export const slotSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   day: z.number().int().min(0).max(6),
   name: z.string().trim().min(1).max(100),
   kind: z.enum(['lesson', 'break']),
-  typeId: z.string().optional(),
+  typeId: z.string().toLowerCase().optional(),
   start: time,
   end: time,
 }).refine((s) => s.start < s.end, { message: 'End time must be after start time.', path: ['end'] });
@@ -128,7 +129,7 @@ export function addPeriods(slots: DaySlot[], period: Omit<DaySlot, 'id' | 'day'>
   return structureSchema.parse([...slots, ...[...new Set(selected)].map((day) => ({ ...period, day, id: makeId() }))]);
 }
 export const linkSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   kind: z.enum(['link', 'teams']),
   name: z.string().trim().min(1).max(200),
   url: z.url().max(2000).refine((v) => {
@@ -144,21 +145,21 @@ export const linkSchema = z.object({
 });
 export type LinkResource = z.infer<typeof linkSchema>;
 export const fileSchema = z.object({
-  id: z.string().uuid(), kind: z.literal('file'),
+  id: uuidSchema, kind: z.literal('file'),
   name: z.string().min(1).max(200), size: z.number().int().nonnegative(),
 });
 export type FileResource = z.infer<typeof fileSchema>;
 export const lessonInputSchema = z.object({
-  classId: z.string().uuid(),
+  classId: uuidSchema,
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(10000),
-  slotIds: z.array(z.string().uuid()).min(1).max(140).refine((ids) => new Set(ids).size === ids.length, 'Duplicate lesson slots.'),
+  slotIds: z.array(uuidSchema).min(1).max(140).refine((ids) => new Set(ids).size === ids.length, 'Duplicate lesson slots.'),
   links: z.array(linkSchema).max(30),
   schedule: recurrenceSchema.optional(),
 }).strict();
 export type LessonInput = z.infer<typeof lessonInputSchema>;
 export const lessonSchema = lessonInputSchema.extend({
-  id: z.string().uuid(), files: z.array(fileSchema), updatedAt: z.string(),
+  id: uuidSchema, files: z.array(fileSchema), updatedAt: z.string(),
   occurrences: z.array(occurrenceSchema).optional(),
 });
 export type Lesson = z.infer<typeof lessonSchema>;

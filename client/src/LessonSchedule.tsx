@@ -18,7 +18,7 @@ export function LessonSchedule({ schedule, slotIds, slots, calendar, onChange }:
       </select></label>
       {schedule.frequency !== 'once' && <label>Number of {schedule.frequency === 'daily' ? 'calendar days' : 'weeks'}<input type="number" required min={1} max={schedule.frequency === 'weekly' ? 53 : 366} value={schedule.count} onChange={(e) => onChange({ ...schedule, count: Number(e.target.value) }, slotIds)} /></label>}
     </div>
-    <p className="small muted">Daily repeats use matching start/end times and period type in each weekday template. Weekends and holidays are skipped, not replaced. Every series stops at the end of its starting term.</p>
+    <p className="small muted">Daily repeats use matching start/end times and period type in each day's template. Excluded teaching days and holidays are skipped, not replaced. Every series stops at the end of its starting term.</p>
     <div className="slot-options">{slots.filter((slot) => slot.kind === 'lesson' && slot.day === weekday(schedule.startDate)).map((slot) => <label className="checkbox" key={slot.id}>
       <input type="checkbox" checked={slotIds.includes(slot.id)} onChange={(e) => onChange(schedule, e.target.checked ? [...slotIds, slot.id] : slotIds.filter((id) => id !== slot.id))} />
       <span>{DAYS[slot.day]} / {slot.name}<small>{slot.start} - {slot.end}</small></span>

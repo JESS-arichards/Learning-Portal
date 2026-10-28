@@ -6,7 +6,8 @@ vi.mock('./db.js', async () => {
   const { default: sql } = await import('mssql');
   return { sql, transaction: mocks.transaction };
 });
-import { snapshot, save, saveStructure, remove } from './repository.js';
+import { snapshot, save, saveStructure, saveCalendar, remove } from './repository.js';
+import { SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } from '../shared/calendar.js';
 import { DEFAULT_PERIOD_TYPES } from '../shared/learning.js';
 import { sql } from './db.js';
 
@@ -58,6 +59,25 @@ describe('relational Learning repository', () => {
     await snapshot(tx);
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
+  it('joins real hexadecimal UUIDs regardless of SQL driver casing and returns browser-compatible IDs', async () => {
+    const identifiers = new Map(Array.from({ length: 5 }, (_, index) => [uuid(index + 1), `abcdef0${index + 1}-abcd-4abc-8def-abcdef012345`]));
+    const rows = records().map((set, setIndex) => set.map((row) => Object.fromEntries(
+      Object.entries(row as Record<string, unknown>).map(([key, value]) => {
+        const replacement = typeof value === 'string' ? identifiers.get(value) : undefined;
+        return [key, replacement ? setIndex % 2 ? replacement : replacement.toUpperCase() : value];
+      }),
+    )));
+    mocks.query.mockResolvedValue({ recordsets: rows });
+    const data = await snapshot();
+    expect(data.classes[0].id).toBe(identifiers.get(classroom.id));
+    expect(data.classes[0].teachers).toEqual(classroom.teachers);
+    expect(data.lessons[0]).toMatchObject({
+      id: identifiers.get(lesson.id), classId: identifiers.get(classroom.id),
+      slotIds: [identifiers.get(uuid(2))],
+      files: [{ ...lesson.files[0], id: identifiers.get(uuid(5)) }],
+      links: [{ ...lesson.links[0], id: identifiers.get(uuid(4)) }],
+    });
+  });
   it('reads named meetings and validates stored options without masking corrupt metadata', async () => {
     const rows = records();
     const meeting = { occurrenceId: uuid(30), lessonId: lesson.id, organizerUserId: 10, state: 'created',
@@ -74,6 +94,32 @@ describe('relational Learning repository', () => {
     await expect(snapshot()).rejects.toThrow();
     rows[3] = DEFAULT_PERIOD_TYPES; rows[2] = [];
     await expect(snapshot()).rejects.toThrow();
+  });
+  it('reads inherited and overridden teaching weeks and rejects corrupt database settings', async () => {
+    const rows = records();
+    const year = { id: uuid(70), name: '2026/27', start: '2026-09-01', end: '2027-07-01' };
+    const term = { id: uuid(71), yearId: uuid(70), name: 'Autumn', start: '2026-09-01', end: '2026-12-11' };
+    rows[9] = [{ ...year, week: JSON.stringify(SUNDAY_TEACHING_WEEK) }];
+    rows[10] = [{ ...term, week: JSON.stringify(DEFAULT_TEACHING_WEEK) }];
+    mocks.query.mockResolvedValue({ recordsets: rows });
+    expect((await snapshot()).calendar).toEqual({ years: [{ ...year, week: SUNDAY_TEACHING_WEEK }], terms: [{ ...term, week: DEFAULT_TEACHING_WEEK }], holidays: [] });
+    rows[9] = [{ ...year, week: null }]; rows[10] = [term];
+    expect((await snapshot()).calendar).toEqual({ years: [year], terms: [term], holidays: [] });
+    for (const week of ['', 'not json', '{"days":[],"startsOn":0}', '{"days":[0],"startsOn":9}']) {
+      rows[9] = [{ ...year, week }];
+      await expect(snapshot()).rejects.toThrow();
+    }
+  });
+  it('writes teaching weeks as parameterized JSON without adding defaults to inherited terms', async () => {
+    const calendar = {
+      years: [{ id: uuid(70), name: '2026/27', start: '2026-09-01', end: '2027-07-01', week: SUNDAY_TEACHING_WEEK }],
+      terms: [{ id: uuid(71), yearId: uuid(70), name: 'Autumn', start: '2026-09-01', end: '2026-12-11' }], holidays: [],
+    };
+    await saveCalendar(tx, calendar);
+    expect(mocks.input).toHaveBeenCalledWith('calendar', sql.NVarChar(sql.MAX), expect.any(String));
+    expect(JSON.parse(mocks.input.mock.calls[0][2])).toEqual(calendar);
+    expect(mocks.query.mock.calls[0][0]).toContain('week nvarchar(max) AS JSON');
+    expect(mocks.query.mock.calls[0][0]).toContain('LearningTerms(Id,YearId,Name,StartDate,EndDate,TeachingWeek)');
   });
   it('parameterizes class fields and replaces only the specified roster', async () => {
     await save(tx, 'class', classroom.id, classroom);

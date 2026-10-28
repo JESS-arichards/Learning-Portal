@@ -17,9 +17,9 @@ export async function saveLessonSetup({ id, saved, input, resources, onSaved, on
 }): Promise<Lesson> {
   if (resources.teams) {
     meetingRequestSchema.parse(resources.teams);
-    const status = await api<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean }>('/teams/status');
+    const status = await api<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean; error?: string }>('/teams/status');
     if (!status.configured || !status.connected || !status.meetingOptionsReady)
-      throw new Error('Connect or reconnect your Microsoft calendar and approve meeting options before saving a Teams lesson.');
+      throw new Error(status.error ?? 'An administrator must configure Microsoft Teams application access and the teacher Microsoft identity before saving a Teams lesson.');
   }
   onProgress('Saving lesson details and links...');
   let lesson = await api<Lesson>(saved ? `/lessons/${id}` : '/lessons', saved ? 'PUT' : 'POST',

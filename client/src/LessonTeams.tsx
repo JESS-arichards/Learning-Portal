@@ -7,7 +7,7 @@ export function LessonTeams({ lesson, data, user, refresh, onBusyChange, staged,
   lesson: Lesson; data: Snapshot; user: User; refresh: () => Promise<void>; onBusyChange: (busy: boolean) => void;
   staged: MeetingRequest | null; onStage: (request: MeetingRequest | null) => void;
 }) {
-  const [status, setStatus] = useState<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean } | null>(null);
+  const [status, setStatus] = useState<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean; error?: string } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [meetings, setMeetings] = useState(data.meetings ?? []);
@@ -22,7 +22,7 @@ export function LessonTeams({ lesson, data, user, refresh, onBusyChange, staged,
     if (!assigned) return;
     let active = true;
     const load = () => {
-      void api<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean }>('/teams/status')
+      void api<{ configured: boolean; connected: boolean; meetingOptionsReady: boolean; error?: string }>('/teams/status')
         .then((result) => { if (active) { setStatus(result); setError(''); } })
         .catch((error: unknown) => { if (active) setError(errorMessage(error)); });
     };
@@ -48,20 +48,19 @@ export function LessonTeams({ lesson, data, user, refresh, onBusyChange, staged,
   }
   return <section>
     <p>Configure meetings for every dated period in this lesson series. No invitations are sent until Save lesson is clicked. You will be the organiser and the class students will receive calendar invitations.</p>
-    {!assigned ? <p className="alert">Only an assigned class teacher can connect their calendar and create or cancel meetings.</p>
+    {!assigned ? <p className="alert">Only an assigned class teacher can create or cancel meetings.</p>
       : <>
         <label>Meeting name<input required maxLength={200} value={title} disabled={busy || Boolean(existingSeries)} onChange={(event) => setTitle(event.target.value)} /></label>
         <label className="checkbox"><input type="checkbox" checked={allowBreakoutRooms} disabled={busy || Boolean(existingSeries)} onChange={(event) => setAllowBreakoutRooms(event.target.checked)} /> Allow breakout rooms</label>
         <p className="small muted">Enables breakout rooms for student groups. Create and assign the actual rooms in Teams. Existing meetings retain their original title and options on retry; school policies still apply.</p>
-        {!status && !error && <p role="status">Checking Microsoft calendar connection...</p>}
-        {status && !status.configured && <p className="alert">Teams is not configured. An administrator must configure the Entra settings and delegated calendar and online-meeting permissions.</p>}
-        {status?.configured && <p><a className="btn secondary" href="/api/teams/connect" target="_blank" rel="noopener noreferrer">Connect / reconnect my Microsoft calendar</a><span className="small muted"> Opens in another tab to preserve this lesson. Return here after connecting.</span></p>}
-        {status?.connected && !status.meetingOptionsReady && <p className="alert">Reconnect your calendar to approve meeting options. An administrator may first need to grant delegated OnlineMeetings.ReadWrite permission.</p>}
+        {!status && !error && <p role="status">Checking school Microsoft Teams access...</p>}
+        {status && !status.configured && <p className="alert">Teams is not configured. An administrator must configure the Entra credentials and application Calendars.ReadWrite and OnlineMeetings.ReadWrite.All permissions.</p>}
+        {status?.configured && (!status.connected || !status.meetingOptionsReady) && <p role="alert" className="alert">{status.error ?? 'An administrator must check Microsoft application permissions, mailbox restrictions and the Teams application access policy.'}</p>}
         <div className="form-actions">
           <button type="button" className="btn primary" disabled={busy || !title.trim()} onClick={stage}>Add Teams meetings on save</button>
           {staged && <button type="button" className="btn secondary" disabled={busy} onClick={() => onStage(null)}>Remove pending Teams setup</button>}
         </div>
-        <p className="small muted">You can configure meetings before connecting, but must connect before saving. Save lesson creates or retries all eligible occurrences without duplicating invitations. A failure is reported explicitly with remaining setup retained.</p>
+        <p className="small muted">The school authorises Teams centrally; no calendar connection is needed. Your verified school Microsoft identity is the organiser. Save lesson creates or retries all eligible occurrences without duplicating invitations. A failure is reported explicitly with remaining setup retained.</p>
         {meetings.some((m) => m.lessonId === lesson.id) && <>
           <p className="small muted">Cancellation of existing invitations is immediate and requires confirmation. Cancel live meetings before changing lesson details or its class roster. Cancelled occurrences are not recreated unless rescheduled.</p>
           <button type="button" className="btn secondary" disabled={busy || !status?.connected || !meetings.some((m) => m.lessonId === lesson.id && m.state === 'created' && m.organizerUserId === user.id)} onClick={() => {

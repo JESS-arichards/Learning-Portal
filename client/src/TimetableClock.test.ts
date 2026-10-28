@@ -1,6 +1,7 @@
 import { Children, isValidElement, type ReactNode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_PERIOD_TYPES, type Snapshot, type User } from '../../shared/learning';
+import { SUNDAY_TEACHING_WEEK } from '../../shared/calendar';
 
 const hooks = vi.hoisted(() => ({ values: [] as unknown[], index: 0, effect: vi.fn(), ref: { current: null as unknown } }));
 vi.mock('react', async (original) => ({
@@ -26,9 +27,9 @@ const data: Snapshot = {
   ],
 };
 const user: User = { id: 1, email: 'student@school.test', displayName: 'Student', isActive: true, sessionVersion: 0, roles: ['Student'], studentEmails: [] };
-function render() {
+function render(snapshot = data) {
   hooks.index = 0;
-  return Timetable({ data, user, children: [] });
+  return Timetable({ data: snapshot, user, children: [] });
 }
 function find(root: ReactNode, predicate: (props: Record<string, unknown>) => boolean): Record<string, unknown> | null {
   for (const child of Children.toArray(root)) {
@@ -111,4 +112,19 @@ it('starts at the top when the selected day has no current period', () => {
   hooks.ref.current = container;
   hooks.effect.mock.calls[1][0]();
   expect(container.scrollTop).toBe(0);
+});
+it('moves excluded dates to a visible day and navigates Sunday-first weeks without changing weekday IDs', () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-30T04:30:00Z'));
+  const snapshot: Snapshot = { ...data, calendar: {
+    years: [{ id: 'year', name: '2026/27', start: '2026-09-01', end: '2027-07-01', week: SUNDAY_TEACHING_WEEK }],
+    terms: [{ id: 'term', yearId: 'year', name: 'Autumn', start: '2026-09-01', end: '2026-12-11' }], holidays: [],
+  } };
+  render(snapshot);
+  hooks.effect.mock.calls[2][0]();
+  expect(hooks.values[3]).toBe('2026-10-25');
+  expect(find(render(snapshot), (props) => Children.toArray(props.children as ReactNode).join('') === 'Sunday 25/10/2026')).not.toBeNull();
+  (find(render(snapshot), (props) => props.children === 'Next week')!.onClick as () => void)();
+  expect(find(render(snapshot), (props) => Children.toArray(props.children as ReactNode).join('') === 'Sunday 01/11/2026')).not.toBeNull();
+  (find(render(snapshot), (props) => props.children === 'Previous week')!.onClick as () => void)();
+  expect(hooks.values[3]).toBe('2026-10-25');
 });

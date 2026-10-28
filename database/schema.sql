@@ -491,6 +491,15 @@ BEGIN TRY
   IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=3)
     INSERT dbo.LearningSchemaMigrations(Version) VALUES(3);
 
+  IF COL_LENGTH('dbo.LearningAcademicYears', 'TeachingWeek') IS NULL
+    ALTER TABLE dbo.LearningAcademicYears ADD TeachingWeek nvarchar(max) NULL
+      CONSTRAINT CK_LearningAcademicYears_TeachingWeek CHECK (TeachingWeek IS NULL OR ISJSON(TeachingWeek)=1);
+  IF COL_LENGTH('dbo.LearningTerms', 'TeachingWeek') IS NULL
+    ALTER TABLE dbo.LearningTerms ADD TeachingWeek nvarchar(max) NULL
+      CONSTRAINT CK_LearningTerms_TeachingWeek CHECK (TeachingWeek IS NULL OR ISJSON(TeachingWeek)=1);
+  IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=4)
+    INSERT dbo.LearningSchemaMigrations(Version) VALUES(4);
+
   COMMIT TRANSACTION;
 END TRY
 BEGIN CATCH

@@ -1,131 +1,81 @@
-import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
 import express from 'express';
-import cookieParser from 'cookie-parser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TENANT = '11111111-2222-4333-8444-555555555555';
 const CLIENT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-const KEY = Buffer.alloc(32, 7).toString('base64');
+const OID = 'bbbbbbbb-1111-4222-8333-cccccccccccc';
 const mocks = vi.hoisted(() => ({
-  config: {} as Record<string, unknown>,
-  store: new Map<number, string>(),
-  teachers: new Set<number>(),
-  queries: [] as string[],
-  users: new Map<number, unknown>(),
-  transactions: 0,
-  rollbacks: 0,
+  config: {} as Record<string, unknown>, teachers: new Set<number>(), users: new Map<number, unknown>(),
+  platform: vi.fn(), queries: [] as string[],
 }));
 vi.mock('./config.js', () => ({ config: mocks.config }));
 vi.mock('./auth.js', () => ({
   requireUser: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    const user = mocks.users.get(Number(req.headers['x-test-user']));
-    if (!user) throw Object.assign(new (class extends Error {})('Please sign in.'), { status: 401 });
-    req.user = user as never;
+    req.user = mocks.users.get(Number(req.headers['x-test-user'])) as never;
+    if (!req.user) return next(Object.assign(new Error('Please sign in.'), { status: 401 }));
     next();
   },
 }));
-vi.mock('./db.js', () => {
-  // Simulates SQL Server app locks shared by every "instance" (module copy) that uses the same database.
-  const appLocks = new Map<string, Promise<void>>();
-  const makeRequest = (owner?: { release: (() => void)[] }) => {
-    const inputs: Record<string, unknown> = {};
+vi.mock('./platform.js', () => ({
+  platform: mocks.platform,
+  parsePlatform: (schema: { parse: (data: unknown) => unknown }, data: unknown) => schema.parse(data),
+}));
+vi.mock('./db.js', () => ({
+  sql: { Int: 'int' },
+  pool: async () => ({ request: () => {
+    let userId = 0;
     const request = {
-      input(name: string, _type: unknown, value: unknown) { inputs[name] = value; return request; },
+      input(_name: string, _type: unknown, value: number) { userId = value; return request; },
       async query(text: string) {
         mocks.queries.push(text);
-        const id = Number(inputs.userId);
-        if (text.includes('sp_getapplock')) {
-          if (!owner) throw new Error('applock outside transaction');
-          const resource = String(inputs.resource);
-          const previous = appLocks.get(resource) ?? Promise.resolve();
-          let release!: () => void;
-          const mine = new Promise<void>((r) => { release = r; });
-          const chained = previous.then(() => mine);
-          appLocks.set(resource, chained);
-          owner.release.push(() => { release(); if (appLocks.get(resource) === chained) appLocks.delete(resource); });
-          await previous;
-          return { recordset: [], rowsAffected: [] };
-        }
-        if (text.includes('LearningClassTeachers')) return { recordset: [{ assigned: mocks.teachers.has(id) ? 1 : 0 }], rowsAffected: [1] };
-        if (text.includes('UserId<>@userId')) return { recordset: [...mocks.store].filter(([k]) => k !== id).map(([userId, payload]) => ({ userId, payload })), rowsAffected: [0] };
-        if (text.includes('SELECT Payload')) return { recordset: mocks.store.has(id) ? [{ payload: mocks.store.get(id) }] : [], rowsAffected: [0] };
-        if (text.startsWith('INSERT')) {
-          if (mocks.store.has(id)) return { recordset: [], rowsAffected: [0] };
-          mocks.store.set(id, String(inputs.payload)); return { recordset: [], rowsAffected: [1] };
-        }
-        if (text.includes('Payload=@previous')) {
-          if (mocks.store.get(id) !== inputs.previous) return { recordset: [], rowsAffected: [0] };
-          if (text.startsWith('DELETE')) mocks.store.delete(id); else mocks.store.set(id, String(inputs.payload));
-          return { recordset: [], rowsAffected: [1] };
-        }
-        throw new Error(`Unexpected SQL: ${text}`);
+        if (!text.includes('LearningClassTeachers')) throw new Error(`Unexpected SQL: ${text}`);
+        return { recordset: [{ assigned: mocks.teachers.has(userId) ? 1 : 0 }] };
       },
     };
     return request;
-  };
-  class Transaction {
-    owner = { release: [] as (() => void)[] };
-    async begin() { mocks.transactions++; }
-    request() { return makeRequest(this.owner); }
-    async commit() { this.owner.release.splice(0).forEach((r) => r()); }
-    async rollback() { mocks.rollbacks++; this.owner.release.splice(0).forEach((r) => r()); }
-  }
-  const pool = async () => ({ request: () => makeRequest() });
-  return { pool, sql: { Int: 'int', NVarChar: () => 'nvarchar', MAX: -1, Transaction, ISOLATION_LEVEL: { READ_COMMITTED: 1 } } };
-});import { HttpError, logger } from './errors.js';
+  } }),
+}));
+import { HttpError } from './errors.js';
 import {
-  applyTeamsMeetingOptions, cancelTeamsEvent, createTeamsEvent, createTeamsRouter, decryptConnection, encryptConnection, teamsStatus, validateTeamsEventInput,
-  TEAMS_SCOPES, type TeamsEventInput, type TeamsMeetingOptions,
+  applyTeamsMeetingOptions, cancelTeamsEvent, createTeamsEvent, createTeamsRouter, teamsStatus, validateTeamsEventInput,
+  TEAMS_SCOPES, type TeamsEventInput,
 } from './teams.js';
 
 const realFetch = globalThis.fetch;
 const graphFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 const teacher = { id: 5, email: 'teacher@school.test', displayName: 'Teacher', isActive: true, sessionVersion: 3, roles: ['Staff'], studentEmails: [] };
-const other = { ...teacher, id: 6, email: 'other@school.test' };
-const student = { ...teacher, id: 7, email: 'student@school.test', roles: ['Student'] };
-const admin = { ...teacher, id: 8, email: 'admin@school.test', roles: ['Full Admin'] };
-const key = Buffer.from(KEY, 'base64');
-const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+const student = { ...teacher, id: 7, roles: ['Student'] };
+const admin = { ...teacher, id: 8, roles: ['Full Admin'] };
+const json = (status: number, body?: unknown, headers: Record<string, string> = {}) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
-const idToken = (claims: Record<string, unknown>) => ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.');
-const configure = () => Object.assign(mocks.config, {
-  PUBLIC_BASE_URL: 'https://learn.school.test', SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: true,
-  ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: 'secret-value', TEAMS_TOKEN_KEY: KEY,
-});
-function seed(user: typeof teacher, overrides: Record<string, unknown> = {}) {
-  mocks.store.set(user.id, encryptConnection(key, user.id, {
-    v: 1, tenantId: TENANT, clientId: CLIENT, graphUserId: `oid-${user.id}`, account: user.email,
-    accessToken: `access-${user.id}`, refreshToken: `refresh-${user.id}`, expiresAt: Date.now() + 3600_000, ...overrides,
-  }));
-}
+const token = () => json(200, { token_type: 'Bearer', access_token: 'application-token', expires_in: 3600 });
+const joinUrl = 'https://teams.microsoft.com/l/meetup-join/abc';
+const created = { id: 'AAMkEvent=', transactionId: 'occ-1111-2222', onlineMeeting: { joinUrl } };
 const input: TeamsEventInput = {
   transactionId: 'occ-1111-2222', subject: 'Maths 7A', description: 'Fractions', date: '2026-11-02', start: '08:00', end: '08:45',
   attendees: [
     { email: 'Student@school.test', displayName: 'Student One' }, { email: 'student@school.test', displayName: 'Dup' },
-    { email: 'teacher@school.test', displayName: 'Self' }, { email: 'two@school.test', displayName: 'Student Two' },
+    { email: teacher.email, displayName: 'Self' }, { email: 'two@school.test', displayName: 'Student Two' },
   ],
 };
-const created = { id: 'AAMkEvent=', transactionId: 'occ-1111-2222', onlineMeeting: { joinUrl: 'https://teams.microsoft.com/l/meetup-join/abc' } };
-
-let server: Server, url: string;
+let server: Server, url: string, generation = 0;
 beforeEach(async () => {
   for (const k of Object.keys(mocks.config)) delete mocks.config[k];
-  configure();
-  mocks.store.clear(); mocks.teachers.clear(); mocks.queries.length = 0; mocks.users.clear(); mocks.transactions = 0; mocks.rollbacks = 0;
+  Object.assign(mocks.config, { ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: `secret-${++generation}` });
+  mocks.teachers.clear(); mocks.users.clear(); mocks.queries.length = 0;
   mocks.teachers.add(teacher.id);
-  for (const u of [teacher, other, student, admin]) mocks.users.set(u.id, u);
+  for (const u of [teacher, student, admin]) mocks.users.set(u.id, u);
+  mocks.platform.mockReset().mockResolvedValue({ userId: teacher.id, tenantId: TENANT, objectId: OID });
   graphFetch.mockReset();
   vi.stubGlobal('fetch', (target: string | URL | Request, init?: RequestInit) => {
     const href = String(target instanceof Request ? target.url : target);
     return href.startsWith('http://127.0.0.1') ? realFetch(target, init) : graphFetch(href, init ?? {});
   });
   const app = express();
-  app.use(cookieParser());
   app.use('/api/teams', createTeamsRouter());
   app.use(((error, _req, res, _next) => {
-    const status = error instanceof HttpError || typeof error?.status === 'number' ? error.status : error?.name === 'ZodError' ? 400 : 500;
-    res.status(status).json({ error: error.message });
+    res.status(error.status ?? (error.name === 'ZodError' ? 400 : 500)).json({ error: error.message });
   }) as express.ErrorRequestHandler);
   await new Promise<void>((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
@@ -133,542 +83,195 @@ beforeEach(async () => {
   url = `http://127.0.0.1:${address.port}`;
 });
 afterEach(async () => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+  vi.unstubAllGlobals(); vi.restoreAllMocks();
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
-const get = (path: string, user?: number, cookie?: string) => realFetch(url + path, {
-  redirect: 'manual', headers: { ...(user ? { 'x-test-user': String(user) } : {}), ...(cookie ? { Cookie: cookie } : {}) },
-});
-async function connect(user = teacher.id) {
-  const response = await get('/api/teams/connect', user);
-  expect(response.status).toBe(302);
-  const location = new URL(response.headers.get('location')!);
-  return { response, location, state: location.searchParams.get('state')!, nonce: location.searchParams.get('nonce')!,
-    cookie: response.headers.get('set-cookie')!.split(';')[0] };
-}
-function microsoftSucceeds(nonce: string, me: Record<string, unknown> = { id: 'oid-5', mail: 'Teacher@school.test', userPrincipalName: 'Teacher@school.test', userType: 'Member' }, claims: Record<string, unknown> = {}) {
-  graphFetch.mockImplementation(async (href) => {
-    if (href.endsWith('/oauth2/v2.0/token')) return json(200, {
-      token_type: 'Bearer', access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600,
-      scope: 'openid profile offline_access User.Read Calendars.ReadWrite',
-      id_token: idToken({ tid: TENANT, oid: 'oid-5', aud: CLIENT, iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, nonce, ...claims }),
-    });
-    if (href.startsWith('https://graph.microsoft.com/v1.0/me?')) return json(200, me);
-    throw new Error(`unexpected ${href}`);
-  });
-}
+const get = (path: string, user?: number) => realFetch(url + path, { redirect: 'manual', headers: user ? { 'x-test-user': String(user) } : {} });
 
-describe('Teams configuration and status', () => {
-  it('reports unconfigured without any database or network call', async () => {
-    for (const k of ['ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'TEAMS_TOKEN_KEY']) delete mocks.config[k];
-    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false, meetingOptionsReady: false });
-    expect(mocks.queries).toEqual([]);
-    expect(graphFetch).not.toHaveBeenCalled();
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503 });
-    expect((await get('/api/teams/connect', teacher.id)).status).toBe(503);
-  });
-  it('rejects partial or malformed configuration explicitly', async () => {
-    mocks.config.TEAMS_TOKEN_KEY = Buffer.alloc(16).toString('base64');
-    await expect(teamsStatus(teacher)).rejects.toMatchObject({ status: 503 });
-    mocks.config.TEAMS_TOKEN_KEY = KEY;
-    delete mocks.config.ENTRA_CLIENT_SECRET;
-    await expect(teamsStatus(teacher)).rejects.toMatchObject({ status: 503 });
-  });
-  it('leaves Teams disabled when existing Entra credentials have no token key', async () => {
-    delete mocks.config.TEAMS_TOKEN_KEY;
-    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false, meetingOptionsReady: false });
-    expect(mocks.queries).toEqual([]);
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('requires a signed-in user on every route including the callback', async () => {
-    for (const path of ['/api/teams/status', '/api/teams/connect', '/api/teams/callback?code=x&state=y']) expect((await get(path)).status).toBe(401);
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('reports connection state and never exposes tokens', async () => {
-    expect(await (await get('/api/teams/status', teacher.id)).json()).toEqual({ configured: true, connected: false, meetingOptionsReady: false });
-    seed(teacher);
-    const body = await (await get('/api/teams/status', teacher.id)).text();
-    expect(JSON.parse(body)).toEqual({ configured: true, connected: true, meetingOptionsReady: false, account: 'teacher@school.test' });
-    expect(body).not.toContain('access-5');
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('requires reconnection when the stored account no longer matches or cannot be decrypted', async () => {
-    seed(teacher, { account: 'old@school.test', scope: TEAMS_SCOPES });
-    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, meetingOptionsReady: false, reconnectRequired: true });
-    mocks.store.set(teacher.id, mocks.store.get(other.id) ?? 'v1.bad.bad.bad');
-    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, meetingOptionsReady: false, reconnectRequired: true });
-  });
-  it('reports meeting options ready only when the stored grant includes OnlineMeetings.ReadWrite', async () => {
-    const cases: [string | undefined, boolean][] = [
-      [undefined, false], ['openid profile offline_access User.Read Calendars.ReadWrite', false], ['OnlineMeetings.Read Calendars.ReadWrite', false],
-      [TEAMS_SCOPES, true], ['https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/OnlineMeetings.ReadWrite', true],
-    ];
-    for (const [scope, ready] of cases) {
-      seed(teacher, scope === undefined ? {} : { scope });
-      expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: true, meetingOptionsReady: ready, account: 'teacher@school.test' });
-      expect(await (await get('/api/teams/status', teacher.id)).json()).toMatchObject({ connected: true, meetingOptionsReady: ready });
-    }
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('becomes ready after reconnecting with the online meetings grant', async () => {
-    const flow = await connect();
-    microsoftSucceeds(flow.nonce);
-    graphFetch.mockImplementationOnce(async () => json(200, {
-      token_type: 'Bearer', access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600, scope: TEAMS_SCOPES,
-      id_token: idToken({ tid: TENANT, oid: 'oid-5', aud: CLIENT, iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, nonce: flow.nonce }),
-    }));
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(302);
-    expect(await teamsStatus(teacher)).toMatchObject({ connected: true, meetingOptionsReady: true });
-  });
-});
-
-describe('Token encryption', () => {
-  it('round-trips with AES-GCM bound to the user and rejects tampering or the wrong key', () => {
-    const value = { v: 1 as const, tenantId: TENANT, clientId: CLIENT, graphUserId: 'g', account: 'a@b.test', accessToken: 'tok-a', refreshToken: 'tok-r', expiresAt: 1 };
-    const payload = encryptConnection(key, 5, value);
-    expect(payload).toMatch(/^v1\./);
-    expect(payload).not.toContain('tok-');
-    expect(decryptConnection(key, 5, payload)).toEqual(value);
-    expect(decryptConnection(key, 6, payload)).toBeUndefined();
-    expect(decryptConnection(Buffer.alloc(32, 1), 5, payload)).toBeUndefined();
-    const parts = payload.split('.');
-    parts[2] = Buffer.from('x' + Buffer.from(parts[2], 'base64url').toString('latin1').slice(1), 'latin1').toString('base64url');
-    expect(decryptConnection(key, 5, parts.join('.'))).toBeUndefined();
-    expect(decryptConnection(key, 5, 'garbage')).toBeUndefined();
-  });
-});
-
-describe('Teams OAuth connect flow', () => {
-  it('only lets assigned staff teachers connect (admins are not impersonators)', async () => {
-    expect((await get('/api/teams/connect', student.id)).status).toBe(403);
-    expect((await get('/api/teams/connect', other.id)).status).toBe(403);
-    expect((await get('/api/teams/connect', admin.id)).status).toBe(403);
-  });
-  it('redirects to the tenant authorize endpoint with PKCE and a bound HttpOnly flow cookie', async () => {
-    const { response, location, cookie } = await connect();
-    expect(location.origin + location.pathname).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
-    expect(Object.fromEntries(location.searchParams)).toMatchObject({
-      client_id: CLIENT, response_type: 'code', redirect_uri: 'https://learn.school.test/api/teams/callback',
-      scope: 'openid profile offline_access User.Read Calendars.ReadWrite OnlineMeetings.ReadWrite', code_challenge_method: 'S256', login_hint: teacher.email,
-    });
-    expect(location.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    const setCookie = response.headers.get('set-cookie')!;
-    expect(setCookie).toMatch(/HttpOnly/); expect(setCookie).toMatch(/Secure/); expect(setCookie).toMatch(/SameSite=Lax/); expect(setCookie).toMatch(/Path=\/api\/teams/);
-    expect(cookie).not.toContain(location.searchParams.get('code_challenge')!);
-  });
-  it('exchanges the code with the PKCE verifier, verifies the account and stores encrypted tokens', async () => {
-    const flow = await connect();
-    microsoftSucceeds(flow.nonce);
-    const response = await get(`/api/teams/callback?code=auth.code-1&state=${flow.state}&session_state=x`, teacher.id, flow.cookie);
-    expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('/classes?teams=connected');
+describe('application-authorised Teams', () => {
+  it('uses existing ENTRA credentials without TEAMS_TOKEN_KEY or teacher tokens and resolves the organiser centrally', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(201, created));
+    expect(await createTeamsEvent(teacher, input)).toEqual({ eventId: created.id, joinUrl, organizerId: OID });
+    expect(mocks.platform).toHaveBeenCalledExactlyOnceWith('/users/5/teams-organizer');
     const [tokenUrl, tokenInit] = graphFetch.mock.calls[0];
     expect(tokenUrl).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`);
-    const form = new URLSearchParams(String(tokenInit.body));
-    expect(form.get('grant_type')).toBe('authorization_code');
-    expect(form.get('code')).toBe('auth.code-1');
-    expect(createHash('sha256').update(form.get('code_verifier')!).digest('base64url')).toBe(flow.location.searchParams.get('code_challenge'));
-    expect(graphFetch.mock.calls[1][0]).toBe('https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName,userType');
-    const stored = mocks.store.get(teacher.id)!;
-    expect(stored).not.toContain('secret-');
-    expect(decryptConnection(key, teacher.id, stored)).toMatchObject({ accessToken: 'secret-access', refreshToken: 'secret-refresh', graphUserId: 'oid-5', account: 'teacher@school.test',
-      scope: 'openid profile offline_access User.Read Calendars.ReadWrite' });
-    expect(response.headers.getSetCookie().some((c) => c.startsWith('learning_teams_flow=;'))).toBe(true);
-  });
-  it('rejects a Microsoft account that does not match the Learning user', async () => {
-    const flow = await connect();
-    microsoftSucceeds(flow.nonce, { id: 'oid-5', mail: 'someone@school.test', userPrincipalName: 'someone@school.test', userType: 'Member' });
-    const response = await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie);
-    expect(response.status).toBe(403);
-    expect(mocks.store.has(teacher.id)).toBe(false);
-  });
-  it('rejects a different staff account whose mail matches but sign-in name does not', async () => {
-    const flow = await connect();
-    microsoftSucceeds(flow.nonce, { id: 'oid-5', mail: 'teacher@school.test', userPrincipalName: 'teacher.admin@school.test', userType: 'Member' });
-    const response = await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie);
-    expect(response.status).toBe(403);
-    expect(mocks.store.has(teacher.id)).toBe(false);
-  });
-  it('rejects guest accounts even when the sign-in name matches', async () => {
-    const flow = await connect();
-    microsoftSucceeds(flow.nonce, { id: 'oid-5', mail: 'teacher@school.test', userPrincipalName: 'teacher@school.test', userType: 'Guest' });
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(403);
-    expect(mocks.store.size).toBe(0);
-  });
-  it('refuses to link one Microsoft account to two Learning users and replaces only the caller\'s row', async () => {
-    seed(other, { graphUserId: 'oid-5' });
-    let flow = await connect();
-    microsoftSucceeds(flow.nonce);
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(409);
-    expect(mocks.store.has(teacher.id)).toBe(false);
-    seed(other);
-    seed(teacher, { accessToken: 'old' });
-    flow = await connect();
-    microsoftSucceeds(flow.nonce);
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(302);
-    expect(decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!.accessToken).toBe('secret-access');
-    expect(decryptConnection(key, other.id, mocks.store.get(other.id)!)!.accessToken).toBe('access-6');
-  });  it('rejects tokens from another tenant or with a mismatched nonce', async () => {
-    let flow = await connect();
-    microsoftSucceeds(flow.nonce, undefined, { tid: '99999999-2222-4333-8444-555555555555' });
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(403);
-    flow = await connect();
-    microsoftSucceeds('wrong-nonce');
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(400);
-    expect(mocks.store.size).toBe(0);
-  });
-  it('validates state, cookie and session binding before any token exchange', async () => {
-    const flow = await connect();
-    expect((await get(`/api/teams/callback?code=abc&state=${'x'.repeat(43)}`, teacher.id, flow.cookie)).status).toBe(400);
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id)).status).toBe(400);
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie.replace(/.$/, 'A'))).status).toBe(400);
-    mocks.teachers.add(other.id);
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, other.id, flow.cookie)).status).toBe(403);
-    mocks.users.set(teacher.id, { ...teacher, sessionVersion: 4 });
-    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(403);
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('sanitizes OAuth errors from the redirect and the token endpoint', async () => {
-    let flow = await connect();
-    let response = await get(`/api/teams/callback?error=access_denied&error_description=${encodeURIComponent('<script>leak</script>')}&state=${flow.state}`, teacher.id, flow.cookie);
-    expect(response.status).toBe(400);
-    expect(await response.text()).not.toContain('leak');
-    flow = await connect();
-    graphFetch.mockResolvedValue(json(400, { error: 'invalid_grant', error_description: 'AADSTS70008 secret detail', correlation_id: 'c' }));
-    response = await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie);
-    expect(response.status).toBe(400);
-    expect(await response.text()).not.toContain('AADSTS');
-  });
-});
-
-describe('Teams events', () => {
-  beforeEach(() => seed(teacher));
-  it('creates a delegated Teams meeting with server-controlled payload and deduplicated attendees', async () => {
-    graphFetch.mockResolvedValue(json(201, created));
-    const result = await createTeamsEvent(teacher, input);
-    expect(result).toEqual({ eventId: 'AAMkEvent=', joinUrl: created.onlineMeeting.joinUrl, organizerId: 'oid-5' });
-    const [href, init] = graphFetch.mock.calls[0];
-    expect(href).toBe('https://graph.microsoft.com/v1.0/me/events');
-    expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer access-5');
-    expect(JSON.parse(String(init.body))).toEqual({
-      subject: 'Maths 7A', body: { contentType: 'text', content: 'Fractions' },
+    const grant = new URLSearchParams(String(tokenInit.body));
+    expect(Object.fromEntries(grant)).toEqual({
+      client_id: CLIENT, client_secret: mocks.config.ENTRA_CLIENT_SECRET, scope: TEAMS_SCOPES, grant_type: 'client_credentials',
+    });
+    const [eventUrl, eventInit] = graphFetch.mock.calls[1];
+    expect(eventUrl).toBe(`https://graph.microsoft.com/v1.0/users/${OID}/events`);
+    expect(eventInit.headers).toMatchObject({ Authorization: 'Bearer application-token' });
+    const body = JSON.parse(String(eventInit.body));
+    expect(body).toMatchObject({
+      transactionId: input.transactionId, subject: input.subject, isOnlineMeeting: true, onlineMeetingProvider: 'teamsForBusiness',
       start: { dateTime: '2026-11-02T08:00:00', timeZone: 'Arabian Standard Time' },
-      end: { dateTime: '2026-11-02T08:45:00', timeZone: 'Arabian Standard Time' },
-      attendees: [
-        { emailAddress: { address: 'student@school.test', name: 'Student One' }, type: 'required' },
-        { emailAddress: { address: 'two@school.test', name: 'Student Two' }, type: 'required' },
-      ],
-      isOnlineMeeting: true, onlineMeetingProvider: 'teamsForBusiness', allowNewTimeProposals: false, transactionId: 'occ-1111-2222',
     });
+    expect(body.organizer).toBeUndefined();
+    expect(body.attendees.map((a: { emailAddress: { address: string } }) => a.emailAddress.address)).toEqual(['student@school.test', 'two@school.test']);
+    expect(mocks.queries.every((query) => !query.includes('LearningTeamsConnections'))).toBe(true);
   });
-  it('accepts validated meeting options but never sends them with the calendar event', async () => {
-    graphFetch.mockResolvedValue(json(201, created));
-    expect(validateTeamsEventInput(teacher, { ...input, options: { allowBreakoutRooms: true } }).options).toEqual({ allowBreakoutRooms: true });
-    await expect(createTeamsEvent(teacher, { ...input, options: { allowBreakoutRooms: true } })).resolves.toMatchObject({ eventId: 'AAMkEvent=' });
-    expect(graphFetch).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(String(graphFetch.mock.calls[0][1].body));
-    expect(body).not.toHaveProperty('options');
-    expect(body).not.toHaveProperty('allowBreakoutRooms');
-    graphFetch.mockReset();
-    for (const options of [{ allowBreakoutRooms: 'yes' }, { allowBreakoutRooms: true, rooms: 3 }, {}, null]) {
-      expect(() => validateTeamsEventInput(teacher, { ...input, options } as unknown as TeamsEventInput)).toThrow(HttpError);
-      await expect(createTeamsEvent(teacher, { ...input, options } as unknown as TeamsEventInput)).rejects.toMatchObject({ status: 400 });
-    }
+  it('caches a single application token across concurrent requests, not per teacher connections', async () => {
+    graphFetch.mockImplementation(async (url) => url.includes('/token') ? token() : json(201, created));
+    await Promise.all([createTeamsEvent(teacher, input), createTeamsEvent(teacher, input)]);
+    expect(graphFetch.mock.calls.filter(([url]) => url.includes('/token'))).toHaveLength(1);
+  });
+  it.each([student, admin, { ...teacher, isActive: false }])('refuses non-active teaching staff $id', async (user) => {
+    await expect(createTeamsEvent(user, input)).rejects.toMatchObject({ status: 403 });
     expect(graphFetch).not.toHaveBeenCalled();
   });
-  it('rejects arbitrary organizers and invalid input', async () => {
-    await expect(createTeamsEvent(teacher, { ...input, organizer: 'x@y.z' } as TeamsEventInput)).rejects.toThrow();
-    await expect(createTeamsEvent(teacher, { ...input, end: '07:00' })).rejects.toThrow();
-    await expect(createTeamsEvent(teacher, { ...input, date: '2026-02-30' })).rejects.toThrow();
+  it('refuses unassigned teachers', async () => {
+    mocks.teachers.clear();
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 403 });
+    expect(mocks.platform).not.toHaveBeenCalled();
+  });
+  it.each([
+    { userId: 99, tenantId: TENANT, objectId: OID },
+    { userId: 5, tenantId: CLIENT, objectId: OID },
+    { userId: 5, tenantId: TENANT, objectId: 'teacher@school.test' },
+  ])('never falls back to email or trusts an invalid central binding', async (identity) => {
+    mocks.platform.mockResolvedValue(identity);
+    await expect(createTeamsEvent(teacher, input)).rejects.toThrow();
     expect(graphFetch).not.toHaveBeenCalled();
   });
-  it('requires an assigned staff teacher with a connection', async () => {
-    await expect(createTeamsEvent(student, input)).rejects.toMatchObject({ status: 403 });
-    await expect(createTeamsEvent(admin, input)).rejects.toMatchObject({ status: 403 });
-    mocks.teachers.add(other.id);
-    await expect(createTeamsEvent(other, input)).rejects.toMatchObject({ status: 409 });
-  });
-  it('enforces the 500-recipient invitation limit with an actionable error before any SQL or Microsoft call', async () => {
-    const people = (n: number) => Array.from({ length: n }, (_, i) => ({ email: `s${i}@school.test`, displayName: `Student ${i}` }));
-    mocks.queries.length = 0;
-    const error = await createTeamsEvent(teacher, { ...input, attendees: people(501) }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(HttpError);
-    expect(error).toMatchObject({ status: 400, message: expect.stringMatching(/501 people.*at most 500.*Split the class/) });
-    expect(mocks.queries).toEqual([]);
+  it('surfaces missing verified identity without trying Graph or email lookups', async () => {
+    mocks.platform.mockRejectedValue(new HttpError(409, 'Teacher has no verified school Microsoft identity.'));
+    expect(await teamsStatus(teacher)).toMatchObject({ configured: true, connected: false, error: expect.stringContaining('verified') });
     expect(graphFetch).not.toHaveBeenCalled();
-    await expect(createTeamsEvent(teacher, { ...input, attendees: people(5001) })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/5000/) });
-    graphFetch.mockResolvedValue(json(201, created));
-    const withDuplicates = [...people(500), ...people(20), { email: teacher.email, displayName: 'Self' }];
-    await expect(createTeamsEvent(teacher, { ...input, attendees: withDuplicates })).resolves.toMatchObject({ eventId: 'AAMkEvent=' });
-    expect(JSON.parse(String(graphFetch.mock.calls[0][1].body)).attendees).toHaveLength(500);
-  });  it('validates synchronously without SQL, tokens or network, even when Teams is unconfigured', () => {
-    for (const k of ['ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'TEAMS_TOKEN_KEY']) delete mocks.config[k];
-    mocks.queries.length = 0;
-    const value = validateTeamsEventInput(teacher, { ...input, subject: '  Maths 7A  ' });
-    expect(value.subject).toBe('Maths 7A');
-    expect(value.attendees).toEqual([
-      { email: 'student@school.test', displayName: 'Student One' }, { email: 'two@school.test', displayName: 'Student Two' },
-    ]);
-    expect(() => validateTeamsEventInput(teacher, { ...input, subject: 'x'.repeat(256) })).toThrow(/subject.*255/);
-    expect(() => validateTeamsEventInput(teacher, { ...input, description: 'x'.repeat(20001) })).toThrow(/20000/);
-    expect(() => validateTeamsEventInput(teacher, { ...input, end: '07:00' })).toThrow(HttpError);
-    expect(validateTeamsEventInput(teacher, { ...input, subject: 'x'.repeat(255) }).subject).toHaveLength(255);
-    expect(mocks.queries).toEqual([]);
+  });
+  it('reports absent or partially configured application credentials clearly', async () => {
+    delete mocks.config.ENTRA_CLIENT_SECRET;
+    await expect(teamsStatus(teacher)).rejects.toMatchObject({ status: 503 });
+    delete mocks.config.ENTRA_CLIENT_ID; delete mocks.config.ENTRA_TENANT_ID;
+    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false, meetingOptionsReady: false });
+  });
+  it('returns application readiness and removes delegated connect and callback endpoints', async () => {
+    graphFetch.mockResolvedValueOnce(token());
+    expect((await get('/api/teams/status')).status).toBe(401);
+    expect((await get('/api/teams/status', student.id)).status).toBe(403);
+    const response = await get('/api/teams/status', teacher.id);
+    expect(await response.json()).toEqual({ configured: true, connected: true, meetingOptionsReady: true });
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect((await get('/api/teams/connect', teacher.id)).status).toBe(404);
+    expect((await get('/api/teams/callback', teacher.id)).status).toBe(404);
+  });
+  it('reports application authentication errors, never reconnect instructions', async () => {
+    graphFetch.mockResolvedValueOnce(json(401, { error: 'invalid_client', error_description: 'SECRET MUST NOT LEAK' }));
+    const result = await teamsStatus(teacher);
+    expect(result).toMatchObject({ connected: false, error: expect.stringContaining('admin consent') });
+    expect(result.error).not.toContain('SECRET MUST NOT LEAK');
+    expect(result.error).not.toMatch(/reconnect/i);
+  });
+  it('rejects invalid input and browser-provided organiser fields before any network call', async () => {
+    await expect(createTeamsEvent(teacher, { ...input, organizer: 'attacker' } as TeamsEventInput)).rejects.toMatchObject({ status: 400 });
+    await expect(createTeamsEvent(teacher, { ...input, date: '2026-02-30' })).rejects.toMatchObject({ status: 400 });
     expect(graphFetch).not.toHaveBeenCalled();
-  });  it('rejects non-Teams join URLs', async () => {
-    graphFetch.mockResolvedValue(json(201, { ...created, onlineMeeting: { joinUrl: 'https://evil.example/teams.microsoft.com' } }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 502 });
   });
-  it('reports ambiguous timeouts with the same transactionId and does not replay', async () => {
-    graphFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
-    const error = await createTeamsEvent(teacher, input).catch((e: unknown) => e);
-    expect(error).toMatchObject({ status: 504 });
-    expect((error as Error).message).toContain('occ-1111-2222');
-    expect(graphFetch).toHaveBeenCalledTimes(1);
-    graphFetch.mockReset();
-    graphFetch.mockResolvedValue(json(500, { error: { code: 'generalException' } }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 504 });
-    expect(graphFetch).toHaveBeenCalledTimes(1);
+  it('validates attendee limits after normalisation and deduplication', () => {
+    expect(validateTeamsEventInput(teacher, input).attendees).toHaveLength(2);
+    const attendees = Array.from({ length: 501 }, (_, i) => ({ email: `student${i}@school.test`, displayName: `Student ${i}` }));
+    expect(() => validateTeamsEventInput(teacher, { ...input, attendees })).toThrow(/at most 500/);
   });
-  it('honours bounded Retry-After throttling', async () => {
-    graphFetch.mockResolvedValueOnce(json(429, { error: { code: 'TooManyRequests' } }, { 'Retry-After': '0' }))
-      .mockResolvedValueOnce(json(201, created));
-    await expect(createTeamsEvent(teacher, input)).resolves.toMatchObject({ eventId: 'AAMkEvent=' });
-    expect(graphFetch).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(String(graphFetch.mock.calls[1][1].body)).transactionId).toBe('occ-1111-2222');
-    graphFetch.mockReset();
-    graphFetch.mockResolvedValue(json(429, {}, { 'Retry-After': '120' }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503 });
-    expect(graphFetch).toHaveBeenCalledTimes(1);
-    graphFetch.mockReset();
-    graphFetch.mockResolvedValue(json(429, {}, { 'Retry-After': '0' }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503 });
-    expect(graphFetch).toHaveBeenCalledTimes(3);
-  });
-  it('maps Graph 401 to an explicit reconnect error', async () => {
-    graphFetch.mockResolvedValue(json(401, { error: { code: 'InvalidAuthenticationToken' } }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 409 });
-  });
-  it('cancels via the delegated cancel action and treats only ErrorItemNotFound 404 as already gone', async () => {
-    graphFetch.mockResolvedValueOnce(new Response(null, { status: 202 }));
-    expect(await cancelTeamsEvent(teacher, 'AAMk/Ev+nt=')).toEqual({ status: 'cancelled' });
-    expect(graphFetch.mock.calls[0][0]).toBe('https://graph.microsoft.com/v1.0/me/events/AAMk%2FEv%2Bnt%3D/cancel');
-    expect(graphFetch.mock.calls[0][1].method).toBe('POST');
-    graphFetch.mockResolvedValueOnce(json(404, { error: { code: 'ErrorItemNotFound' } }));
-    expect(await cancelTeamsEvent(teacher, 'AAMk')).toEqual({ status: 'alreadyGone' });
-    graphFetch.mockResolvedValueOnce(json(404, {}));
-    await expect(cancelTeamsEvent(teacher, 'AAMk')).rejects.toMatchObject({ status: 404 });
-    await expect(cancelTeamsEvent(teacher, '../me')).rejects.toThrow();
-    await expect(cancelTeamsEvent(student, 'AAMk')).rejects.toMatchObject({ status: 403 });
-  });
-});
-
-describe('Teams cancellation contract', () => {
-  beforeEach(() => seed(teacher));
-  it('never reports success for a repeated cancel that Graph refuses with a non-404 status', async () => {
-    graphFetch.mockResolvedValue(json(400, { error: { code: 'ErrorInvalidRequest', message: 'already cancelled' } }));
-    await expect(cancelTeamsEvent(teacher, 'AAMk')).rejects.toMatchObject({ status: 502 });
-    graphFetch.mockResolvedValue(json(403, { error: { code: 'ErrorAccessDenied' } }));
-    await expect(cancelTeamsEvent(teacher, 'AAMk')).rejects.toMatchObject({ status: 403 });
-  });
-  it('reports an ambiguous cancel timeout explicitly without replaying', async () => {
-    graphFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
-    const error = await cancelTeamsEvent(teacher, 'AAMk').catch((e: unknown) => e);
-    expect(error).toMatchObject({ status: 504 });
-    expect((error as Error).message).toMatch(/did not confirm/);
-    expect(graphFetch).toHaveBeenCalledTimes(1);
-  });
-});
-describe('Token refresh', () => {
-  const refreshed = (n: number) => json(200, { token_type: 'Bearer', access_token: `new-access-${n}`, refresh_token: `new-refresh-${n}`, expires_in: 3600 });
-  it('serializes refresh per user, rotates the refresh token and keeps users isolated', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    mocks.teachers.add(other.id);
-    seed(other, { expiresAt: Date.now() - 1000 });
-    let n = 0;
-    graphFetch.mockImplementation(async (href, init) => {
-      if (href.endsWith('/token')) { await new Promise((r) => setTimeout(r, 20)); return refreshed(++n); }
-      expect(href).toBe('https://graph.microsoft.com/v1.0/me/events');
-      return json(201, created);
-    });
-    await Promise.all([createTeamsEvent(teacher, input), createTeamsEvent(teacher, input), createTeamsEvent(other, input)]);
-    const tokenCalls = graphFetch.mock.calls.filter(([href]) => href.endsWith('/token'));
-    expect(tokenCalls).toHaveLength(2);
-    expect(tokenCalls.map(([, init]) => new URLSearchParams(String(init.body)).get('refresh_token')).sort()).toEqual(['refresh-5', 'refresh-6']);
-    const a = decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!;
-    const b = decryptConnection(key, other.id, mocks.store.get(other.id)!)!;
-    expect(a.refreshToken).not.toBe(b.refreshToken);
-    expect(a.refreshToken).toMatch(/^new-refresh-/);
-    expect(a.graphUserId).toBe('oid-5');
-    expect(b.graphUserId).toBe('oid-6');
-  });
-  it('serializes refresh across separate server instances through the SQL app lock', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    vi.resetModules();
-    const instanceA = await import('./teams.js');
-    vi.resetModules();
-    const instanceB = await import('./teams.js');
-    expect(instanceA).not.toBe(instanceB);
-    let n = 0;
-    graphFetch.mockImplementation(async (href, init) => {
-      if (href.endsWith('/token')) { await new Promise((r) => setTimeout(r, 30)); return refreshed(++n); }
-      return json(201, { ...created, transactionId: JSON.parse(String(init.body)).transactionId });
-    });
-    await Promise.all([instanceA.createTeamsEvent(teacher, input), instanceB.createTeamsEvent(teacher, { ...input, transactionId: 'occ-other-1' })]);
-    const tokenCalls = graphFetch.mock.calls.filter(([href]) => href.endsWith('/token'));
-    expect(tokenCalls).toHaveLength(1);
-    const auth = graphFetch.mock.calls.filter(([href]) => href.endsWith('/me/events')).map(([, i]) => (i.headers as Record<string, string>).Authorization);
-    expect(auth).toEqual(['Bearer new-access-1', 'Bearer new-access-1']);
-    expect(decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!.refreshToken).toBe('new-refresh-1');
-  });
-  it('rolls back and never writes stale tokens when the row changed outside the lock', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    graphFetch.mockImplementation(async (href) => {
-      if (href.endsWith('/token')) { seed(teacher, { accessToken: 'winner', refreshToken: 'winner-refresh' }); return refreshed(1); }
-      return json(201, created);
-    });
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 409 });
-    expect(decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!.refreshToken).toBe('winner-refresh');
-    expect(mocks.rollbacks).toBe(1);
-  });  it('removes a revoked connection and requires reconnect', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    graphFetch.mockResolvedValue(json(400, { error: 'invalid_grant', error_description: 'revoked' }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 409 });
-    expect(mocks.store.has(teacher.id)).toBe(false);
-  });
-  it('explains missing consent for the new scope on refresh and requires reconnect', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    graphFetch.mockResolvedValue(json(400, { error: 'invalid_grant', error_codes: [65001], error_description: 'AADSTS65001 consent' }));
-    const error = await createTeamsEvent(teacher, input).catch((e: unknown) => e);
-    expect(error).toMatchObject({ status: 409, message: expect.stringMatching(/OnlineMeetings\.ReadWrite.*Reconnect Teams.*administrator/) });
-    expect((error as Error).message).not.toContain('AADSTS');
-    expect(mocks.store.has(teacher.id)).toBe(false);
-  });
-  it('records the granted scope when refreshing tokens', async () => {
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    graphFetch.mockResolvedValueOnce(json(200, { token_type: 'Bearer', access_token: 'a2', refresh_token: 'r2', expires_in: 3600, scope: TEAMS_SCOPES }))
-      .mockResolvedValueOnce(json(201, created));
+  it('preserves transaction IDs on an ambiguous create and explicit retry', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockRejectedValueOnce(new TypeError('network failure')).mockResolvedValueOnce(json(201, created));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 504, message: expect.stringContaining('same transactionId') });
     await createTeamsEvent(teacher, input);
-    expect(new URLSearchParams(String(graphFetch.mock.calls[0][1].body)).get('scope')).toBe(TEAMS_SCOPES);
-    expect(decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!.scope).toBe(TEAMS_SCOPES);
+    expect(graphFetch.mock.calls.slice(1).map(([, init]) => JSON.parse(String(init.body)).transactionId)).toEqual([input.transactionId, input.transactionId]);
   });
-  it('never logs tokens or secrets', async () => {
-    const spies = (['info', 'warn', 'error'] as const).map((level) => vi.spyOn(logger, level));
-    seed(teacher, { expiresAt: Date.now() - 1000 });
-    graphFetch.mockResolvedValueOnce(refreshed(1)).mockResolvedValueOnce(json(500, { error: { code: 'x' } }));
-    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 504 });
-    const logged = JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
-    for (const secret of ['access-5', 'refresh-5', 'new-access-1', 'new-refresh-1', 'secret-value', KEY]) expect(logged).not.toContain(secret);
+  it('does not automatically replay a 503 creation whose outcome may be ambiguous', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(503, { error: { code: 'ServiceUnavailable' } }));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 504, message: expect.stringContaining('same transactionId') });
+    expect(graphFetch).toHaveBeenCalledTimes(2);
+  });
+  it('rejects missing or untrusted Teams join URLs without silently completing creation', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(201, { ...created, onlineMeeting: { joinUrl: 'https://evil.test' } }));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 502, message: expect.stringContaining('same transactionId') });
+  });
+  it('surfaces mailbox restrictions and does not retry failed authorisation as a new event', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(403, { error: { code: 'ErrorAccessDenied' } }));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 403, message: expect.stringContaining('Exchange mailbox') });
+    expect(graphFetch).toHaveBeenCalledTimes(2);
+  });
+  it('invalidates an expired/rejected application token so a safe explicit retry obtains a new token', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(401, { error: { code: 'InvalidAuthenticationToken' } }))
+      .mockResolvedValueOnce(token()).mockResolvedValueOnce(json(201, created));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503 });
+    await createTeamsEvent(teacher, input);
+    expect(graphFetch.mock.calls.filter(([url]) => url.includes('/token'))).toHaveLength(2);
+  });
+  it('honours throttling without changing the durable transaction ID', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(429, {}, { 'retry-after': '0' })).mockResolvedValueOnce(json(201, created));
+    await createTeamsEvent(teacher, input);
+    expect(graphFetch.mock.calls[1][1].body).toBe(graphFetch.mock.calls[2][1].body);
+  });
+  it('leaves long throttles actionable rather than waiting indefinitely', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(429, {}, { 'retry-after': '60' }));
+    await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503, message: expect.stringContaining('60 seconds') });
+  });
+  it('cancels existing delegated events in the same verified mailbox without any old token, even after reassignment', async () => {
+    mocks.teachers.clear();
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(202));
+    expect(await cancelTeamsEvent(teacher, 'AAMkOldEvent+/=')).toEqual({ status: 'cancelled' });
+    expect(graphFetch.mock.calls[1][0]).toBe(`https://graph.microsoft.com/v1.0/users/${OID}/events/AAMkOldEvent%2B%2F%3D/cancel`);
+    expect(mocks.queries).toHaveLength(0);
+  });
+  it('treats only explicit ErrorItemNotFound as an already removed event', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(404, { error: { code: 'ErrorItemNotFound' } }))
+      .mockResolvedValueOnce(json(404, { error: { code: 'ResourceNotFound' } }));
+    expect(await cancelTeamsEvent(teacher, created.id)).toEqual({ status: 'alreadyGone' });
+    await expect(cancelTeamsEvent(teacher, created.id)).rejects.toMatchObject({ status: 404 });
   });
 });
-describe('Teams meeting options', () => {
-  const joinUrl = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABC%40thread.v2/0?context=%7b%22Tid%22%3a%22t%22%7d&x='q'";
-  const meetingId = 'MSpkYzE3Njc0Yy04MWQ5LTRhZGItYmZi_-=';
-  const meeting = (overrides: Record<string, unknown> = {}) => ({ id: meetingId, joinWebUrl: joinUrl, subject: 'Maths 7A', allowBreakoutRooms: false, ...overrides });
-  const lookupUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings?$filter=${encodeURIComponent(`JoinWebUrl eq '${joinUrl.replace(/'/g, "''")}'`)}`;
-  const meetingUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(meetingId)}`;
-  const on: TeamsMeetingOptions = { allowBreakoutRooms: true };
-  beforeEach(() => seed(teacher, { scope: TEAMS_SCOPES }));
 
-  it('looks up the meeting by escaped join URL and PATCHes only allowBreakoutRooms', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: true })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).resolves.toBeUndefined();
-    expect(graphFetch).toHaveBeenCalledTimes(2);
-    const [getHref, getInit] = graphFetch.mock.calls[0];
-    expect(getHref).toBe(lookupUrl);
-    expect(getHref).toContain("$filter=JoinWebUrl%20eq%20'https%3A%2F%2Fteams.microsoft.com%2Fl%2Fmeetup-join%2F19%253ameeting_ABC%2540thread.v2");
-    expect(getHref).toContain("x%3D''q'''");
-    expect(getInit.method).toBe('GET');
-    const [patchHref, patchInit] = graphFetch.mock.calls[1];
-    expect(patchHref).toBe(meetingUrl);
-    expect(patchInit.method).toBe('PATCH');
-    expect((patchInit.headers as Record<string, string>).Authorization).toBe('Bearer access-5');
-    expect((patchInit.headers as Record<string, string>)['Content-Type']).toBe('application/json');
-    expect(JSON.parse(String(patchInit.body))).toEqual({ allowBreakoutRooms: true });
+describe('application onlineMeeting options', () => {
+  it('looks up and patches the meeting under the verified organiser object ID', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(200, { value: [{ id: 'meeting+id=', joinWebUrl: joinUrl }] }))
+      .mockResolvedValueOnce(json(200, { id: 'meeting+id=', joinWebUrl: joinUrl, allowBreakoutRooms: true }));
+    await applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: true });
+    const lookup = new URL(graphFetch.mock.calls[1][0]);
+    expect(lookup.pathname).toBe(`/v1.0/users/${OID}/onlineMeetings`);
+    expect(lookup.searchParams.get('$filter')).toBe(`JoinWebUrl eq '${joinUrl}'`);
+    expect(graphFetch.mock.calls[2][0]).toBe(`https://graph.microsoft.com/v1.0/users/${OID}/onlineMeetings/meeting%2Bid%3D`);
+    expect(JSON.parse(String(graphFetch.mock.calls[2][1].body))).toEqual({ allowBreakoutRooms: true });
   });
-  it('disables breakout rooms with an explicit false', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ allowBreakoutRooms: true })] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: false })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: false })).resolves.toBeUndefined();
-    expect(JSON.parse(String(graphFetch.mock.calls[1][1].body))).toEqual({ allowBreakoutRooms: false });
+  it('reads back an omitted option instead of assuming success', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(200, { value: [{ id: 'meeting', joinWebUrl: joinUrl }] }))
+      .mockResolvedValueOnce(json(200, { id: 'meeting' })).mockResolvedValueOnce(json(200, { id: 'meeting', allowBreakoutRooms: false }));
+    await applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: false });
+    expect(graphFetch).toHaveBeenCalledTimes(4);
   });
-  it('reads the meeting back when the update response omits the value, and never assumes success', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, { id: meetingId }))
-      .mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: true })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).resolves.toBeUndefined();
-    expect(graphFetch.mock.calls[2][0]).toBe(meetingUrl);
-    expect(graphFetch.mock.calls[2][1].method).toBe('GET');
-    graphFetch.mockReset();
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, { id: meetingId }))
-      .mockResolvedValueOnce(json(200, { id: meetingId }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/did not confirm/) });
-  });
-  it('fails explicitly when Microsoft does not apply the requested value', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: false })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/did not enable breakout rooms/) });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ id: 'other', allowBreakoutRooms: true })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ joinWebUrl: 'https://teams.microsoft.com/l/other', allowBreakoutRooms: true })));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
-  });
-  it('rejects zero, multiple or mismatched lookup results without patching', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [] }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 404, message: expect.stringMatching(/not changed/) });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting(), meeting({ id: 'second' })] }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/more than one/) });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ joinWebUrl: 'https://teams.microsoft.com/l/meetup-join/other' })] }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/does not match/) });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ id: '../../me' })] }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ joinWebUrl: null })] }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
-    graphFetch.mockResolvedValueOnce(json(200, { unexpected: true }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
-    expect(graphFetch.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
-  });
-  it('requires the OnlineMeetings.ReadWrite scope before any Microsoft call', async () => {
-    for (const scope of [undefined, 'openid profile offline_access User.Read Calendars.ReadWrite']) {
-      seed(teacher, scope === undefined ? {} : { scope });
-      const error = await applyTeamsMeetingOptions(teacher, joinUrl, on).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(HttpError);
-      expect(error).toMatchObject({ status: 409, message: expect.stringMatching(/OnlineMeetings\.ReadWrite.*Reconnect Teams.*administrator/) });
-    }
-    expect(graphFetch).not.toHaveBeenCalled();
-  });
-  it('maps Graph permission refusals to reconnect/admin guidance and never reports success', async () => {
-    graphFetch.mockResolvedValueOnce(json(403, { error: { code: 'Forbidden' } }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/Reconnect Teams.*administrator/) });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(403, { error: { code: 'Forbidden' } }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 403 });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(400, { error: { code: 'BadRequest' } }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/meeting options request \(BadRequest\)/) });
-    graphFetch.mockResolvedValueOnce(json(401, { error: { code: 'InvalidAuthenticationToken' } }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 409 });
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(404, { error: { code: 'NotFound' } }));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 404 });
-  });
-  it('reports an ambiguous PATCH as unconfirmed and safe to retry, without replaying it', async () => {
-    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
-    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 504, message: expect.stringMatching(/did not confirm.*safe to repeat/) });
+  it.each([
+    { value: [] },
+    { value: [{ id: 'meeting', joinWebUrl: 'https://teams.microsoft.com/l/other' }] },
+    { value: [{ id: 'a', joinWebUrl: joinUrl }, { id: 'b', joinWebUrl: joinUrl }] },
+  ])('does not patch missing, ambiguous or mismatched meetings: $value', async ({ value }) => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(200, { value }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: true })).rejects.toThrow();
     expect(graphFetch).toHaveBeenCalledTimes(2);
   });
-  it('validates input before any SQL, token or network access', async () => {
-    mocks.queries.length = 0;
-    const bad: [string, unknown][] = [
-      ['https://evil.example/l/meetup-join/x', on], ['http://teams.microsoft.com/l/meetup-join/x', on], ['not a url', on],
-      [`https://teams.microsoft.com/${'x'.repeat(2100)}`, on], [joinUrl, { allowBreakoutRooms: 'true' }], [joinUrl, {}],
-      [joinUrl, { allowBreakoutRooms: true, breakoutRooms: [{ name: 'A' }] }], [joinUrl, null],
-    ];
-    for (const [link, options] of bad) {
-      await expect(applyTeamsMeetingOptions(teacher, link, options as TeamsMeetingOptions)).rejects.toMatchObject({ status: 400 });
-    }
-    expect(mocks.queries).toEqual([]);
-    expect(graphFetch).not.toHaveBeenCalled();
+  it('does not publish unconfirmed settings when school policy ignores the requested value', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(200, { value: [{ id: 'meeting', joinWebUrl: joinUrl }] }))
+      .mockResolvedValueOnce(json(200, { id: 'meeting', allowBreakoutRooms: false }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: true })).rejects.toMatchObject({
+      status: 502, message: expect.stringContaining("organisation's Teams policy"),
+    });
   });
-  it('only lets staff apply options to their own connected meeting', async () => {
-    await expect(applyTeamsMeetingOptions(student, joinUrl, on)).rejects.toMatchObject({ status: 403 });
-    await expect(applyTeamsMeetingOptions(other, joinUrl, on)).rejects.toMatchObject({ status: 409 });
+  it('reports missing Teams application access policy explicitly', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(403, { error: { code: 'Forbidden' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: true })).rejects.toMatchObject({
+      status: 403, message: expect.stringContaining('Teams application access policy'),
+    });
+  });
+  it('retains the invitation and asks to retry options after an ambiguous PATCH', async () => {
+    graphFetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(json(200, { value: [{ id: 'meeting', joinWebUrl: joinUrl }] }))
+      .mockRejectedValueOnce(new TypeError('network failure'));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: true })).rejects.toMatchObject({
+      status: 504, message: expect.stringContaining('invitation already exists'),
+    });
+  });
+  it('rejects invalid options and malicious join links locally', async () => {
+    await expect(applyTeamsMeetingOptions(teacher, 'https://evil.test', { allowBreakoutRooms: true })).rejects.toMatchObject({ status: 400 });
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: 'true' } as never)).rejects.toMatchObject({ status: 400 });
     expect(graphFetch).not.toHaveBeenCalled();
   });
 });

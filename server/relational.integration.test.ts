@@ -8,6 +8,7 @@ import type sql from 'mssql';
 vi.mock('./db.js', async () => ({ sql: (await import('mssql')).default, transaction: vi.fn() }));
 import { snapshot, save, saveStructure, saveCalendar, remove } from './repository.js';
 import { DEFAULT_PERIOD_TYPES, type LearningClass, type Lesson } from '../shared/learning.js';
+import { SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } from '../shared/calendar.js';
 
 // Explicit opt-in; this suite creates its own LocalDB instance and never uses application credentials.
 const enabled = process.env.LEARNING_LOCALDB_TESTS === '1' && process.platform === 'win32';
@@ -65,14 +66,17 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     };
     return { request: () => request } as unknown as sql.Transaction;
   }
-  async function readSnapshot() {
+  async function readSnapshot(uppercaseGuids = false) {
     const connection = { request: () => ({
       async query(query: string) {
         const selects = query.split(';').map((part) => part.trim()).filter(Boolean);
         const text = selects.map((select) => `SET @result += COALESCE((${select} FOR JSON PATH),N'[]') + N',';`).join('\n');
         const json = run(`DECLARE @result nvarchar(max)=N'['; ${text}
           SET @result=LEFT(@result,LEN(@result)-1)+N']'; SELECT @result;`);
-        return { recordsets: JSON.parse(json) };
+        const recordsets: unknown = JSON.parse(json, (_key, value: unknown) =>
+          uppercaseGuids && typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+            ? value.toUpperCase() : value);
+        return { recordsets };
       },
     }) } as unknown as sql.Transaction;
     return snapshot(connection);
@@ -220,5 +224,51 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     await remove(transaction(), 'lesson', dated.id);
     expect(run('SELECT COUNT(*) FROM dbo.LearningOccurrences;')).toBe('0');
     expect(run('SELECT COUNT(*) FROM dbo.LearningLiveMeetings;')).toBe('0');
+  });
+  it('upgrades existing calendars non-destructively and round-trips year defaults and term overrides', async () => {
+    reset(); run(schema);
+    const calendar = {
+      years: [{ id: uuid(30), name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
+      terms: [{ id: uuid(31), yearId: uuid(30), name: 'Autumn', start: '2026-09-01', end: '2026-12-11' },
+        { id: uuid(32), yearId: uuid(30), name: 'Spring', start: '2027-01-03', end: '2027-03-26' }], holidays: [],
+    };
+    await saveCalendar(transaction(), calendar);
+    run(`ALTER TABLE dbo.LearningAcademicYears DROP CONSTRAINT CK_LearningAcademicYears_TeachingWeek;
+      ALTER TABLE dbo.LearningTerms DROP CONSTRAINT CK_LearningTerms_TeachingWeek;
+      ALTER TABLE dbo.LearningAcademicYears DROP COLUMN TeachingWeek;
+      ALTER TABLE dbo.LearningTerms DROP COLUMN TeachingWeek;
+      DELETE dbo.LearningSchemaMigrations WHERE Version=4;`);
+    run(schema); run(schema);
+    expect((await readSnapshot()).calendar).toEqual(calendar);
+    const configured = { ...calendar, years: [{ ...calendar.years[0], week: SUNDAY_TEACHING_WEEK }],
+      terms: [{ ...calendar.terms[0], week: DEFAULT_TEACHING_WEEK }, calendar.terms[1]] };
+    await saveCalendar(transaction(), configured);
+    run(schema);
+    expect((await readSnapshot()).calendar).toEqual(configured);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningSchemaMigrations WHERE Version=4;')).toBe('1');
+    await saveCalendar(transaction(), calendar);
+    expect((await readSnapshot()).calendar).toEqual(calendar);
+  });
+  it('preserves hexadecimal lesson and resource identities across uppercase SQL driver results and subsequent writes', async () => {
+    reset(); run(schema);
+    const id = (n: number) => `abcdef0${n}-abcd-4abc-8def-abcdef012345`;
+    const roster = { ...classroom, id: id(1) };
+    const period = { ...slot, id: id(2) };
+    const dated: Lesson = { ...lesson, id: id(3), classId: roster.id, slotIds: [period.id],
+      links: [{ ...lesson.links[0], id: id(4) }], files: [{ ...lesson.files[0], id: id(5) }],
+      schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
+      occurrences: [{ id: id(6), date: '2026-10-26', slotId: period.id }] };
+    await save(transaction(), 'class', roster.id, roster);
+    await saveStructure(transaction(), { slots: [period], periodTypes: DEFAULT_PERIOD_TYPES });
+    await save(transaction(), 'lesson', dated.id, dated);
+    const data = await readSnapshot(true);
+    expect(data.lessons[0]).toMatchObject({ ...dated, updatedAt: expect.any(String) });
+    expect(new Date(data.lessons[0].updatedAt).getTime()).toBe(new Date(dated.updatedAt).getTime());
+    expect(data.classes[0].id).toBe(roster.id);
+    const edited = { ...data.lessons[0], links: [{ ...dated.links[0], name: 'Updated link' }],
+      files: [...dated.files, { id: id(7), kind: 'file' as const, name: 'Second.pdf', size: 3 }] };
+    await save(transaction(), 'lesson', dated.id.toUpperCase(), edited);
+    expect((await readSnapshot(true)).lessons[0]).toMatchObject(edited);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessons;')).toBe('1');
   });
 });

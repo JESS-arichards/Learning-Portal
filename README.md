@@ -62,24 +62,45 @@ use a **private Azure Blob Storage container**.
 1. In **Administration > Academic calendar**, add an academic year, its terms and
    holiday/closure ranges. Start/end dates are inclusive; equal dates represent
    a single day. Academic years and terms cannot overlap; terms and holidays must
-   fit inside their academic year. Teaching dates are Monday-Friday inside a term,
-   excluding holidays. Inter-term dates and weekends remain visible as non-teaching
-   dates. Dates are derived from ranges, not manually entered one by one.
+   fit inside their academic year. Choose the academic year's included teaching days
+   and first day of week, using **Monday-Friday**, **Sunday-Thursday** or custom days.
+   Existing calendars default to Monday-Friday. Terms inherit the year setting;
+   turn off **Use academic-year teaching week** to override a single term, or use
+   **Apply a teaching week to multiple terms** to update selected terms together.
+   Apply updates the form; **Save calendar** persists it. Restoring year defaults
+   removes the selected term overrides. Changing a year default does not replace
+   explicit term overrides.
+   Teaching dates must be included weekdays inside a term, excluding holidays.
+   Excluded weekdays are hidden from all dated student/parent/teacher timetable
+   views; included holidays and inter-term days remain visible but have no teaching.
+   The Sunday-Thursday preset displays Sunday first, and Monday-Friday Monday first.
+   The selected date controls week boundaries; dates crossing a term/year boundary
+   use their own effective included days. Outside terms the academic-year week is
+   used; outside all academic years the default is Monday-Friday.
+   Opening an excluded date selects the first visible day in that week.
+   Dates are derived from ranges, not manually entered one by one.
 2. Keep **Day structure** as the weekday period template. Daily recurrence matches
    the selected periods by start/end time and period type in each weekday template.
    Missing matching periods produce an error rather than silently dropping lessons.
 3. Teachers choose an actual start date, one or more periods on that day, and
    **One-off**, **Daily** (1-366 calendar days) or **Weekly** (1-53 weeks).
-   Skipped weekends/holidays count toward the requested duration, without extending
+   Skipped excluded weekdays/holidays count toward the requested duration, without extending
    the series. A maximum of 500 period occurrences is allowed per lesson.
 4. Preview shows skipped dates, term end and the actual final teaching date. A
    series never crosses its starting term's end; teachers explicitly confirm
    truncation before saving. Students/parents can browse actual dates and weeks,
    and only see lessons scheduled for the selected date.
+5. Saving a calendar is blocked if it would invalidate or change any existing dated
+   lesson's occurrences, including adding or excluding teaching days. The error
+   lists affected lessons, classes and UK-formatted dates. Cancel their Teams
+   meetings and reschedule/remove those lessons before changing the calendar.
+   Week settings never renumber or delete weekday period templates.
 
 Schema version 2 adds calendar, occurrence and live-meeting tables without deleting
 existing data. Legacy weekly lessons remain readable before a calendar is configured;
 afterwards they must be converted to dated schedules to appear in the dated timetable.
+Schema version 4 adds nullable teaching-week settings on years and terms without
+changing existing calendar data or lesson/meeting IDs.
 For the requested **fresh development schedules**, temporarily set
 `ALLOW_SCHEDULE_RESET=true` on the **development Learning web app only**, then use
 the admin calendar's reset action and type `CLEAR DEVELOPMENT LESSONS`. It deletes
@@ -93,41 +114,101 @@ Date-aware conflict checks protect shared classes, teachers and students.
 
 ## Teacher-owned Teams meetings
 
-On the existing Entra app registration, add **delegated** `User.Read`,
-`Calendars.ReadWrite` and `OnlineMeetings.ReadWrite`, grant tenant admin consent and configure a **Web** redirect:
-`<Learning PUBLIC_BASE_URL>/api/teams/callback`. The flow also requests `openid`,
-`profile` and `offline_access`; application calendar permissions are not used.
-The development callback is:
-`https://jess-learn-dev-ctdqcjhkb7c3f9cp.westus3-01.azurewebsites.net/api/teams/callback`.
-For Vite development use `http://localhost:5174/api/teams/callback`.
+On the existing Entra app registration, add Microsoft Graph **Application**
+permissions `Calendars.ReadWrite` and `OnlineMeetings.ReadWrite.All` and grant
+tenant-wide administrator consent. **Delegated** permissions are not sufficient.
+The server obtains an application token using `client_credentials` and scope
+`https://graph.microsoft.com/.default`; teachers never connect/reconnect a calendar.
+No Teams OAuth callback, refresh token, `User.Read` or `offline_access` is needed
+for this feature. Do not remove permissions used by other existing app features.
 
 Set these **Learning web app** settings. Reuse the existing Entra app registration
 and credentials; no new registration or separate Teams client secret is needed.
 App Service settings are per web app, so credentials present on Applications Portal
 must also be configured on Learning (or use shared Key Vault references).
-Leave `TEAMS_TOKEN_KEY` unset to disable Teams, even when Entra credentials exist.
+Leave all three `ENTRA_*` settings unset to disable Teams. Partial settings fail
+startup validation. `TEAMS_TOKEN_KEY` is obsolete and ignored.
 
 | Setting | Value |
 | --- | --- |
 | `ENTRA_TENANT_ID` | Existing school Entra tenant UUID |
 | `ENTRA_CLIENT_ID` | Existing application/client UUID |
 | `ENTRA_CLIENT_SECRET` | Existing valid secret for that app registration; keep server-side |
-| `TEAMS_TOKEN_KEY` | Base64-encoded random 32-byte encryption key; keep stable and secret |
+
+**Restrict mailbox access before enabling this in production.** An unscoped
+`Calendars.ReadWrite` application grant can access every Exchange mailbox.
+The Exchange restriction and Teams policy below are independent: configure both.
+Because these credentials may be shared with the Portal mail sender, review its
+required mailbox access before narrowing the app; do not break existing workloads.
+
+For an existing Entra calendar grant restricted using Exchange Application Access
+Policies, put permitted organiser mailboxes in a **mail-enabled security group**,
+then run as an Exchange administrator (replace placeholders):
+
+```powershell
+Connect-ExchangeOnline
+New-ApplicationAccessPolicy -AppId "<ENTRA_CLIENT_ID>" -PolicyScopeGroupId "learning-organisers@school.example" -AccessRight RestrictAccess -Description "Learning organiser mailboxes"
+Test-ApplicationAccessPolicy -Identity "allowed-teacher@school.example" -AppId "<ENTRA_CLIENT_ID>"
+Test-ApplicationAccessPolicy -Identity "excluded-user@school.example" -AppId "<ENTRA_CLIENT_ID>"
+```
+
+The allowed test must grant access and the excluded test must deny it. Exchange
+policy propagation can exceed one hour; confirm actual Graph calls as well.
+[Application Access Policies are legacy](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-access-policies).
+Microsoft recommends [Exchange Application RBAC](https://learn.microsoft.com/en-us/exchange/permissions-exo/application-rbac)
+for new deployments instead. With RBAC, create a mailbox management scope, register
+the Enterprise Application service principal, assign **Application Calendars.ReadWrite**
+to that scope and test both allowed/excluded mailboxes:
+
+```powershell
+New-ManagementScope -Name "LearningOrganisers" -RecipientRestrictionFilter "CustomAttribute15 -eq 'LearningOrganiser'"
+New-ServicePrincipal -AppId "<ENTRA_CLIENT_ID>" -ObjectId "<ENTERPRISE_APP_SERVICE_PRINCIPAL_OBJECT_ID>" -DisplayName "Learning Portal"
+New-ManagementRoleAssignment -Name "LearningCalendars" -App "<ENTERPRISE_APP_SERVICE_PRINCIPAL_OBJECT_ID>" -Role "Application Calendars.ReadWrite" -CustomResourceScope "LearningOrganisers"
+Test-ServicePrincipalAuthorization -Identity "<ENTERPRISE_APP_SERVICE_PRINCIPAL_OBJECT_ID>" -Resource "allowed-teacher@school.example"
+Test-ServicePrincipalAuthorization -Identity "<ENTERPRISE_APP_SERVICE_PRINCIPAL_OBJECT_ID>" -Resource "excluded-user@school.example"
+```
+
+Use an attribute approved by your Exchange administrator and mark only authorised
+mailboxes. Reuse an existing Exchange service-principal registration if present.
+**RBAC grants are additive: remove the Entra-wide `Calendars.ReadWrite` grant when
+using scoped RBAC instead**, otherwise the unrestricted grant bypasses the scope.
+Keep Graph `OnlineMeetings.ReadWrite.All` admin consent. This application also works
+with RBAC-only calendar authorisation; it does not require token calendar roles.
+
+Grant a Teams application access policy **per organiser**, not globally:
+
+```powershell
+Connect-MicrosoftTeams
+New-CsApplicationAccessPolicy -Identity "LearningMeetings" -AppIds "<ENTRA_CLIENT_ID>" -Description "Learning online lesson options"
+Grant-CsApplicationAccessPolicy -PolicyName "LearningMeetings" -Identity "<TEACHER_ENTRA_OBJECT_ID>"
+Get-CsApplicationAccessPolicy -Identity "LearningMeetings"
+Get-CsOnlineUser -Identity "<TEACHER_ENTRA_OBJECT_ID>" | Select-Object Identity, ApplicationAccessPolicy
+```
+
+Repeat the grant for every permitted teacher. Review/merge any existing policy
+rather than overwriting another workload's app IDs. Allow up to 30 minutes for
+[Teams policy propagation](https://learn.microsoft.com/en-us/graph/cloud-communication-online-meeting-application-access-policy).
+Entra consent alone does not authorise `/users/{id}/onlineMeetings`.
 
 Teachers need an Exchange Online mailbox, a Teams licence and a policy permitting
 meeting scheduling. While setting up a dated lesson, an assigned Staff teacher chooses
 **Teams**, enters a meeting name and chooses **Allow breakout rooms** as needed.
-Choose **Connect / reconnect my Microsoft calendar**, then **Add Teams meetings on save**.
+Choose **Add Teams meetings on save**; there is no teacher connection step.
 The dialog only stages the meeting settings; **Save lesson** creates the meetings
 after saving the lesson details, links and files.
-The connection opens in another tab to preserve the lesson editor. Existing connections
-must reconnect to approve the additional `OnlineMeetings.ReadWrite` scope before
-creating meetings with options. The account
-must be a tenant Member whose Microsoft sign-in name (UPN) matches the central
-teacher's email in the configured school tenant. Matching only the `mail` attribute
-is not sufficient; UPN/email aliases that differ need identity mapping before use.
-Tokens are encrypted in SQL, never returned to the browser. OAuth uses PKCE and an
-expiring state cookie bound to the teacher session.
+Deploy the companion central Portal endpoint
+`GET /api/platform/v1/users/:id/teams-organizer` first. It accepts only the Learn
+service credential and resolves an active central Staff user's verified
+`Users.EntraObjectId` plus the configured tenant. This binding is established by
+verified central Microsoft sign-in; imported staff without a binding must sign in
+once to the central Portal. It is not calendar consent. The Learning server rejects
+a mismatched tenant or user ID and never resolves organisers from browser email,
+UPN, submitted object ID or lesson fields. OIDs are not added to browser user profiles.
+Calendar calls use `/users/{verified-object-id}/events`; options use
+`/users/{verified-object-id}/onlineMeetings`. Application tokens stay in server memory
+and are neither persisted in SQL nor returned to the browser. Existing encrypted
+delegated connections are no longer read; retain/delete their unused rows according
+to your credential-retention policy.
 
 Each period occurrence creates its own Teams-enabled calendar event (not an Outlook
 recurrence series), with the teacher as organiser and the class's server-side roster
@@ -155,6 +236,18 @@ Cancel live meetings before editing/deleting their lesson or changing its roster
 Only the original organiser can cancel. Calendar changes never silently reschedule
 Microsoft invitations. School Teams policies still govern lobby, presenters,
 recording and student participation; the app does not override those policies.
+Previously delegated events can be cancelled with application access to the same
+verified teacher mailbox using their stored event IDs; no old token is needed.
+Changing/removing a teacher's central identity or mailbox may require administrator
+recovery. Only Graph's explicit `ErrorItemNotFound` is treated as already removed.
+The status check verifies server configuration, active assigned staff, central
+identity and application authentication, not effective mailbox/Teams policies.
+Policy denial is reported explicitly by the relevant Graph operation; a failed
+options update preserves the durable event for safe retry or cancellation.
+Verify creation, invitation delivery, option updates, cancellation of both new and
+old delegated events, and denied access to excluded mailboxes in the real tenant
+with test accounts before rollout. Automated tests mock Microsoft/SQL; they cannot
+verify tenant consent, licences, mailbox provisioning, policy propagation or delivery.
 
 ## Setup
 
@@ -187,8 +280,8 @@ recording and student participation; the app does not override those policies.
      or local-disk fallback is used, including in development.**
 4. Configure sign-in and the Microsoft 365 mail sender on Applications Portal.
    Learning sign-in remains central and does not accept passwords/OTP codes.
-   The optional Teams feature separately authorises a teacher's calendar, requiring
-   a Learning **Web** callback URI as described below, not a SPA redirect URI.
+   The optional Teams feature uses administrator-authorised application access as
+   described above; it requires no separate teacher OAuth callback or consent.
    Portal URLs must be origins without paths or credentials.
 5. Install and start:
 
@@ -504,7 +597,8 @@ Administrators set periods for each Monday–Sunday independently under **Admin 
 structure**. Times use 24-hour **school local time**, without browser timezone conversion.
 Periods cannot overlap on a day. There is one shared weekly day structure; different
 year groups/divisions can leave unneeded periods unscheduled. This version has no
-date-specific exceptions, term calendars, rotating weeks or separate division bells.
+date-specific period-template exceptions, rotating weeks or separate division bells.
+Academic years/terms control included teaching weekdays and holidays separately.
 
 Teachers use **My classes > Create lesson**, enter a name/description and choose a dated
 schedule and periods. Before saving, use the three resource buttons:
@@ -513,15 +607,22 @@ schedule and periods. Before saving, use the three resource buttons:
 **Teams** opens the meeting-name and breakout-room dialog described above.
 Files, link edits and new Teams setup are staged until **Save lesson**, which stays
 at the bottom. No file uploads or new invitations happen while configuring a dialog.
+The file/link dialogs confirm when selections have been queued; they only report
+uploads or links as saved once the server has confirmed persistence. Reopen either
+dialog after saving to see that confirmation. Both have a bottom **Close** button
+in addition to the header **X**; closing a dialog retains pending selections.
 Closing the editor prompts before discarding pending changes. Unsaved selections
 are held in browser memory, not persisted as draft lessons or blobs.
-Saving validates the schedule and Teams connection first, saves the lesson and links,
+Saving validates the schedule and school-authorised Teams readiness first, saves the lesson and links,
 then applies file changes, then creates the meeting series. These external operations
 cannot be atomic: partial failures explicitly report what remains and keep pending
 work for retry. Stable lesson/file IDs and occurrence transaction IDs prevent
 duplicates when a successful response was lost. Completed uploads are removed from
 the pending queue. Cancelling an existing Teams invitation remains an explicitly
 confirmed, immediate action, rather than a staged addition.
+UUID identifiers are normalised to lowercase at API and database-read boundaries.
+This keeps browser-generated IDs consistent with SQL Server's uppercase GUID
+representation, including file/link lookups immediately after lesson creation.
 Resource-only saves are allowed while live meetings exist; lesson details and
 schedules remain protected against invitation drift. A resource-only save never
 recreates cancelled occurrences. Shared files and external links appear on every occurrence;

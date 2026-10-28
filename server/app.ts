@@ -21,8 +21,9 @@ import { EMPTY_CALENDAR, previewSchedule } from '../shared/calendar.js';
 import { createCalendarRouter } from './calendarRoutes.js';
 import { createTeamsRouter } from './teams.js';
 import { createLiveLessonRouter } from './liveLessons.js';
+import { uuidSchema } from '../shared/identifiers.js';
 
-const idSchema = z.string().uuid();
+const idSchema = uuidSchema;
 function id(value: unknown) { return idSchema.parse(value); }
 function editable(user: NonNullable<express.Request['user']>, data: Snapshot, classId: string) {
   const classroom = data.classes.find((c) => c.id === classId);

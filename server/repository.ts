@@ -4,11 +4,12 @@ import {
   periodTypeSchema, slotSchema, linkSchema, fileSchema, meetingOptionsSchema, type LearningClass, type Lesson, type Snapshot,
 } from '../shared/learning.js';
 import { sql, transaction } from './db.js';
-import { academicCalendarSchema, occurrenceSchema } from '../shared/calendar.js';
+import { academicCalendarSchema, occurrenceSchema, teachingWeekSchema } from '../shared/calendar.js';
+import { uuidSchema } from '../shared/identifiers.js';
 
 type Connection = sql.ConnectionPool | sql.Transaction;
 type Structure = Pick<Snapshot, 'slots' | 'periodTypes'>;
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 const classRow = classSchema.omit({ teachers: true, students: true });
 const teacherRow = personSchema.extend({ classId: uuid });
 const studentRow = studentSchema.extend({ classId: uuid });
@@ -31,8 +32,8 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
     SELECT LessonId AS lessonId, PeriodId AS periodId FROM dbo.LearningLessonPeriods ORDER BY LessonId, Position;
     SELECT Id AS id, LessonId AS lessonId, Kind AS kind, Name AS name, Url AS url FROM dbo.LearningLessonLinks ORDER BY LessonId, Position;
     SELECT Id AS id, LessonId AS lessonId, 'file' AS kind, Name AS name, CONVERT(float, Size) AS size FROM dbo.LearningLessonFiles ORDER BY LessonId, Position;
-    SELECT Id AS id, Name AS name, CONVERT(char(10),StartDate,23) AS start, CONVERT(char(10),EndDate,23) AS [end] FROM dbo.LearningAcademicYears;
-    SELECT Id AS id, YearId AS yearId, Name AS name, CONVERT(char(10),StartDate,23) AS start, CONVERT(char(10),EndDate,23) AS [end] FROM dbo.LearningTerms;
+    SELECT Id AS id, Name AS name, CONVERT(char(10),StartDate,23) AS start, CONVERT(char(10),EndDate,23) AS [end], TeachingWeek AS week FROM dbo.LearningAcademicYears;
+    SELECT Id AS id, YearId AS yearId, Name AS name, CONVERT(char(10),StartDate,23) AS start, CONVERT(char(10),EndDate,23) AS [end], TeachingWeek AS week FROM dbo.LearningTerms;
     SELECT Id AS id, YearId AS yearId, Name AS name, CONVERT(char(10),StartDate,23) AS start, CONVERT(char(10),EndDate,23) AS [end] FROM dbo.LearningHolidays;
     SELECT Id AS id, LessonId AS lessonId, PeriodId AS slotId, CONVERT(char(10),LessonDate,23) AS date FROM dbo.LearningOccurrences ORDER BY LessonDate, PeriodId;
     SELECT Id AS lessonId, Schedule AS schedule FROM dbo.LearningLessons WHERE Schedule IS NOT NULL;
@@ -43,7 +44,9 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
   const rows = z.tuple([
     z.array(classRow), z.array(teacherRow), z.array(studentRow), z.array(periodTypeSchema),
     z.array(slotSchema), z.array(lessonRow), z.array(lessonPeriodRow), z.array(linkRow), z.array(fileRow),
-    academicCalendarSchema.shape.years, academicCalendarSchema.shape.terms, academicCalendarSchema.shape.holidays,
+    z.array(z.object({ ...academicCalendarSchema.shape.years.element.shape, week: z.string().nullable().optional() })),
+    z.array(z.object({ ...academicCalendarSchema.shape.terms.element.shape, week: z.string().nullable().optional() })),
+    academicCalendarSchema.shape.holidays,
     z.array(occurrenceSchema.extend({ lessonId: uuid })), z.array(z.object({ lessonId: uuid, schedule: z.string() })),
     z.array(z.object({ occurrenceId: uuid, lessonId: uuid, organizerUserId: z.number(), state: z.enum(['pending', 'created', 'cancelled']), joinUrl: z.string().nullable(),
       title: z.string().nullable().optional(), options: z.string().nullable().optional(), optionsApplied: z.boolean() })),
@@ -51,7 +54,10 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
   const [classes, teachers, students, periodTypes, slots, lessons, periods, links, files, years, terms, holidays, occurrences, schedules, meetings] = rows;
   return {
     ...dayStructureSchema.parse({ slots, periodTypes }),
-    calendar: academicCalendarSchema.parse({ years, terms, holidays }),
+    calendar: academicCalendarSchema.parse({
+      years: years.map(({ week, ...year }) => ({ ...year, ...(week != null ? { week: teachingWeekSchema.parse(JSON.parse(week)) } : {}) })),
+      terms: terms.map(({ week, ...term }) => ({ ...term, ...(week != null ? { week: teachingWeekSchema.parse(JSON.parse(week)) } : {}) })), holidays,
+    }),
     meetings: meetings.map((meeting) => ({ ...meeting, options: meeting.options ? meetingOptionsSchema.parse(JSON.parse(meeting.options)) : null })),
     classes: classes.map((classroom) => classSchema.parse({
       ...classroom,
@@ -77,7 +83,7 @@ export async function snapshot(connection?: Connection): Promise<Snapshot> {
 }
 
 function recordRequest(tx: sql.Transaction, id: string, value: LearningClass | Lesson) {
-  uuid.parse(id);
+  id = uuid.parse(id);
   if (value.id !== id) throw new Error('The saved ID must match the record ID.');
   return tx.request().input('id', sql.UniqueIdentifier, id)
     .input('value', sql.NVarChar(sql.MAX), JSON.stringify(value));
@@ -140,10 +146,10 @@ export async function saveCalendar(tx: sql.Transaction, input: unknown): Promise
   const calendar = academicCalendarSchema.parse(input);
   await tx.request().input('calendar', sql.NVarChar(sql.MAX), JSON.stringify(calendar)).query(`
     DELETE FROM dbo.LearningHolidays; DELETE FROM dbo.LearningTerms; DELETE FROM dbo.LearningAcademicYears;
-    INSERT dbo.LearningAcademicYears(Id,Name,StartDate,EndDate)
-      SELECT id,name,start,[end] FROM OPENJSON(@calendar,'$.years') WITH (id uniqueidentifier,name nvarchar(100),start date,[end] date);
-    INSERT dbo.LearningTerms(Id,YearId,Name,StartDate,EndDate)
-      SELECT id,yearId,name,start,[end] FROM OPENJSON(@calendar,'$.terms') WITH (id uniqueidentifier,yearId uniqueidentifier,name nvarchar(100),start date,[end] date);
+    INSERT dbo.LearningAcademicYears(Id,Name,StartDate,EndDate,TeachingWeek)
+      SELECT id,name,start,[end],week FROM OPENJSON(@calendar,'$.years') WITH (id uniqueidentifier,name nvarchar(100),start date,[end] date,week nvarchar(max) AS JSON);
+    INSERT dbo.LearningTerms(Id,YearId,Name,StartDate,EndDate,TeachingWeek)
+      SELECT id,yearId,name,start,[end],week FROM OPENJSON(@calendar,'$.terms') WITH (id uniqueidentifier,yearId uniqueidentifier,name nvarchar(100),start date,[end] date,week nvarchar(max) AS JSON);
     INSERT dbo.LearningHolidays(Id,YearId,Name,StartDate,EndDate)
       SELECT id,yearId,name,start,[end] FROM OPENJSON(@calendar,'$.holidays') WITH (id uniqueidentifier,yearId uniqueidentifier,name nvarchar(100),start date,[end] date);
   `);

@@ -70,7 +70,7 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
       <LessonSchedule schedule={draft.schedule!} slotIds={draft.slotIds} slots={data.slots} calendar={data.calendar} onChange={(schedule, slotIds) => setDraft({ ...draft, schedule, slotIds })} />
       </fieldset>
     </form>
-    <LessonResources lesson={{ ...draft, id: lessonId, files: saved?.files ?? [], occurrences: saved?.occurrences, updatedAt: saved?.updatedAt ?? '' }}
+    <LessonResources lesson={{ ...draft, links: saved?.links ?? [], id: lessonId, files: saved?.files ?? [], occurrences: saved?.occurrences, updatedAt: saved?.updatedAt ?? '' }}
       links={draft.links} resources={resources} data={data} user={user} disabled={busy} onBusyChange={setResourceBusy} refresh={refresh}
       onLinksChange={(links) => setDraft((current) => ({ ...current, links }))} onResourcesChange={setResources} />
     {error && <p role="alert" className="alert error">{error}</p>}

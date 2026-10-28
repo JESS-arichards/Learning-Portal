@@ -22,9 +22,9 @@ let lesson: Lesson;
 let links: LinkResource[];
 let resources: StagedResources;
 const data: Snapshot = { classes: [], lessons: [], slots: [], periodTypes: DEFAULT_PERIOD_TYPES };
-function render() {
+function render(disabled = false) {
   state.index = 0;
-  return LessonResources({ lesson, links, resources, data, user, disabled: false,
+  return LessonResources({ lesson, links, resources, data, user, disabled,
     onLinksChange: (value) => { links = value; }, onResourcesChange: (value) => { resources = value; },
     onBusyChange: vi.fn(), refresh: vi.fn() });
 }
@@ -73,6 +73,32 @@ it('stages and edits a named link without any API write', () => {
   click('Remove'); expect(links).toEqual([]);
   expect(state.api).not.toHaveBeenCalled();
 });
+it('confirms queued links and files honestly and provides an explicit Close button', () => {
+  click('External Link'); input(200, 'Reading'); input(2000, 'https://school.test/reading'); submit();
+  expect(find(render(), (props) => props.role === 'status')?.children).toContain('"Reading" added successfully. Click Save lesson');
+  click('Close');
+  expect(find(render(), (props) => props.title === 'External link')).toBeNull();
+  expect(links).toHaveLength(1);
+  click('Files');
+  choose([new File(['PDF'], 'Worksheet.pdf')]);
+  expect(find(render(), (props) => props.role === 'status')?.children).toContain('Queued for upload; click Save lesson to upload');
+  click('Close');
+  expect(find(render(), (props) => props.title === 'Lesson files')).toBeNull();
+  expect(resources.files).toHaveLength(1);
+  expect(state.api).not.toHaveBeenCalled();
+});
+it('confirms persisted uploads and links when reopening their dialogs after Save lesson', () => {
+  lesson.files = [{ id: uuid(9), kind: 'file', name: 'Worksheet.pdf', size: 3 }];
+  lesson.links = [{ id: uuid(10), kind: 'link', name: 'Reading', url: 'https://school.test/reading' }];
+  links = lesson.links;
+  click('Files');
+  expect(find(render(), (props) => props.role === 'status')?.children).toEqual([1, ' ', 'file uploaded', ' successfully and saved to this lesson.']);
+  click('Close'); click('External Link');
+  expect(find(render(), (props) => props.role === 'status')?.children).toEqual([1, ' ', 'link saved', ' successfully to this lesson.']);
+  click('Edit'); input(200, 'Changed reading'); submit();
+  expect(find(render(), (props) => props.children === 'Saved')).toBeNull();
+  expect(find(render(), (props) => props.children === 'Pending Save lesson')).not.toBeNull();
+});
 it('keeps entered values and rejects non-HTTPS links before staging', () => {
   click('External Link'); input(200, 'Unsafe'); input(2000, 'http://school.test'); submit();
   expect(find(render(), (props) => props.role === 'alert')).not.toBeNull();
@@ -109,4 +135,15 @@ it('enforces file count, size and supported extensions before staging', () => {
   choose([large]);
   expect(find(render(), (props) => props.role === 'alert')?.children).toContain('25 MB');
   expect(resources.files).toEqual([]);
+  expect(find(render(), (props) => props.role === 'status')).toBeNull();
+});
+it('keeps the dialog open while saving, whether Close or the header X is used', () => {
+  click('Files');
+  const tree = render(true);
+  const closeButton = find(tree, (props) => props.children === 'Close' && typeof props.onClick === 'function')!;
+  expect(closeButton.disabled).toBe(true);
+  (closeButton.onClick as () => void)();
+  (find(tree, (props) => props.title === 'Lesson files')!.onClose as () => void)();
+  expect(find(render(), (props) => props.title === 'Lesson files')).not.toBeNull();
+  expect(resources).toEqual(emptyResources());
 });

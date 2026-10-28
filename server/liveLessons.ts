@@ -5,6 +5,7 @@ import { snapshot } from './repository.js';
 import { HttpError, logger } from './errors.js';
 import { createTeamsEvent, cancelTeamsEvent, teamsStatus, validateTeamsEventInput, applyTeamsMeetingOptions } from './teams.js';
 import { meetingRequestSchema, type User, type Snapshot, type MeetingRequest } from '../shared/learning.js';
+import { uuidSchema } from '../shared/identifiers.js';
 
 function assigned(user: User, data: Snapshot, lessonId: string, occurrenceId: string) {
   const lesson = data.lessons.find((item) => item.id === lessonId);
@@ -27,13 +28,13 @@ function meetingInput(user: User, { lesson, classroom, occurrence, slot }: Retur
 export function createLiveLessonRouter() {
   const router = Router();
   router.post('/lessons/:id/occurrences/:occurrenceId/teams', async (req, res) => {
-    const lessonId = z.string().uuid().parse(req.params.id);
-    const occurrenceId = z.string().uuid().parse(req.params.occurrenceId);
+    const lessonId = uuidSchema.parse(req.params.id);
+    const occurrenceId = uuidSchema.parse(req.params.occurrenceId);
     const requested: MeetingRequest | undefined = req.body === undefined ? undefined : meetingRequestSchema.parse(req.body);
     const status = await teamsStatus(req.user!);
-    if (!status.configured || !status.connected) throw new HttpError(409, 'Connect your Microsoft calendar before creating live meetings.');
+    if (!status.configured || !status.connected) throw new HttpError(409, status.error ?? 'An administrator must configure Microsoft Teams application access before creating live meetings.');
     if (requested && status.meetingOptionsReady === false)
-      throw new HttpError(409, 'Reconnect your Microsoft calendar after an administrator grants delegated OnlineMeetings.ReadWrite permission.');
+      throw new HttpError(409, 'An administrator must grant application OnlineMeetings.ReadWrite.All permission and a Teams application access policy.');
     await transaction(async (tx) => {
       const data = await snapshot(tx);
       const context = assigned(req.user!, data, lessonId, occurrenceId);
@@ -82,8 +83,8 @@ export function createLiveLessonRouter() {
     res.json(meeting);
   });
   router.post('/lessons/:id/occurrences/:occurrenceId/teams/cancel', async (req, res) => {
-    const lessonId = z.string().uuid().parse(req.params.id);
-    const occurrenceId = z.string().uuid().parse(req.params.occurrenceId);
+    const lessonId = uuidSchema.parse(req.params.id);
+    const occurrenceId = uuidSchema.parse(req.params.occurrenceId);
     await transaction(async (tx) => {
       const data = await snapshot(tx);
       assigned(req.user!, data, lessonId, occurrenceId);

@@ -54,11 +54,22 @@ it('does not upload files or create meetings when lesson validation/save fails',
   expect(mock.api).toHaveBeenCalledOnce();
   expect(resources.files).toHaveLength(1);
 });
-it('checks consent before creating any lesson, uploads or invitations', async () => {
+it('checks administrator-authorised Teams readiness before creating any lesson, uploads or invitations', async () => {
   resources.teams = { title: 'Workshop', options: { allowBreakoutRooms: false } };
   mock.api.mockResolvedValueOnce({ configured: true, connected: true, meetingOptionsReady: false });
-  await expect(save()).rejects.toThrow('approve meeting options');
+  await expect(save()).rejects.toThrow('administrator must configure Microsoft Teams application access');
   expect(mock.api).toHaveBeenCalledExactlyOnceWith('/teams/status');
+});
+it('surfaces the application readiness error without asking a teacher to connect or persisting anything', async () => {
+  resources.teams = { title: 'Workshop', options: { allowBreakoutRooms: false } };
+  resources.files = [{ id: uploaded.id, file: new File(['PDF'], uploaded.name) }];
+  mock.api.mockResolvedValueOnce({ configured: true, connected: false, meetingOptionsReady: false,
+    error: 'Your central account has no verified Microsoft identity. Sign in with Microsoft on the central Portal.' });
+  await expect(save()).rejects.toThrow('no verified Microsoft identity');
+  expect(mock.api).toHaveBeenCalledExactlyOnceWith('/teams/status');
+  expect(resources.files).toHaveLength(1);
+  expect(resources.teams).not.toBeNull();
+  expect(saved).toBeUndefined();
 });
 it('retains failed uploads and retries the same file and lesson identities', async () => {
   resources.files = [{ id: uploaded.id, file: new File(['PDF'], uploaded.name) }];

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
 import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
-import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday } from '../../shared/calendar';
+import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday, timetableWeek } from '../../shared/calendar';
 import { DATE_DISPLAY_POLICY, formatDate } from '../../shared/dateFormatting';
 
 const schoolClock = new Intl.DateTimeFormat(DATE_DISPLAY_POLICY.locale, {
@@ -62,7 +62,7 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
   const day = dated ? weekday(date) : legacyDay;
   const calendar = data.calendar ?? EMPTY_CALENDAR;
   const status = dayStatus(calendar, date);
-  const weekStart = addDays(date, -day);
+  const weekDates = dated ? timetableWeek(calendar, date) : [];
   useEffect(() => {
     const timer = setInterval(() => {
       const next = schoolTime();
@@ -93,6 +93,9 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
       ? container.scrollTop + current.getBoundingClientRect().top - container.getBoundingClientRect().top - 8
       : 0;
   }, [currentSlotId, dated, date, day, mode, selected?.email]);
+  useEffect(() => {
+    if (dated && !weekDates.includes(date) && weekDates.length) setDate(weekDates[0]);
+  }, [dated, date, weekDates.join(',')]);
   return <>
     <div className="page-heading"><div><p className="eyebrow">YOUR LEARNING, AT A GLANCE</p><h1>{parentView ? 'Family learning' : 'My timetable'}</h1><p className="muted">A clear view of the week ahead. All times are school local time.</p></div><div className="heading-icon"><BookOpen /></div></div>
     {user.roles.includes('Parent') && (user.roles.includes('Staff') || user.roles.includes('Student')) && <div className="segmented" aria-label="Timetable view">
@@ -117,8 +120,10 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
           <button className="btn secondary" onClick={() => setDate(schoolDate())}>Today</button>
           <button className="btn secondary" onClick={() => setDate(addDays(date, 7))}>Next week</button>
         </div>}
-        <div className="day-tabs" aria-label="Day of the week">{DAYS.map((name, index) => {
-          const tabDate = addDays(weekStart, index);
+        <div className="day-tabs" aria-label="Day of the week">{(dated ? weekDates : DAYS.map((_, index) => index)).map((value) => {
+          const tabDate = typeof value === 'string' ? value : '';
+          const index = typeof value === 'string' ? weekday(value) : value;
+          const name = DAYS[index];
           const daySlots = data.slots.filter((s) => s.day === index && s.kind === 'lesson' && (!dated || dayStatus(calendar, tabDate).teaching));
           const registrations = daySlots.filter((slot) => data.periodTypes
             .find((type) => type.id === periodTypeId(slot))?.name.trim().toLowerCase() === 'registration').length;
@@ -126,7 +131,7 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
           return <button key={name} onClick={() => dated ? setDate(tabDate) : setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}>{dated ? <strong className="day-tab-heading">{`${name.slice(0, 3)} - ${formatDate(tabDate, 'dayMonth')}`}</strong> : <span>{name.slice(0, 3)}</span>}<small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
         })}</div>
         <div className="day-summary"><h2>{DAYS[day]}{dated && ` ${formatDate(date)}`}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
-        {dated && !status.teaching && <p className="alert" role="status">{status.holiday ? `Holiday: ${status.holiday.name}` : weekday(date) >= 5 ? 'Weekend - no teaching.' : 'Outside school terms - no teaching.'}</p>}
+        {dated && !status.teaching && <p className="alert" role="status">{status.holiday ? `Holiday: ${status.holiday.name}` : !status.included ? 'Excluded teaching day - no teaching.' : 'Outside school terms - no teaching.'}</p>}
         <div className="timeline" ref={timeline} role="region" aria-label="Day timetable periods" tabIndex={0}>
           {slots.map((slot) => {
             const scheduled = lessons.filter((lesson) => onDate(lesson, slot.id));

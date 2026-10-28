@@ -183,6 +183,10 @@ input:disabled, select:disabled { opacity: .7; cursor: not-allowed; }
 .lesson-resource-dialog .file-row { flex-wrap: wrap; overflow-wrap: anywhere; }
 .lesson-resource-dialog .file-row a { min-width: 0; flex: 1 1 180px; }
 .lesson-details-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.calendar-entry + .calendar-entry { margin-top: 24px; }
+.teaching-week-days { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 16px 0; }
+.teaching-week-days .checkbox { margin: 0; }
+.teaching-week-settings > label { max-width: 260px; }
 .admin-note { display: flex; gap: 15px; align-items: center; padding: 16px 20px; margin-bottom: 24px; }
 .admin-note svg { flex-shrink: 0; }
 .admin-note p { margin: 0; font-size: .83rem; color: var(--text-muted); }

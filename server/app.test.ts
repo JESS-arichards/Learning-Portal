@@ -24,7 +24,7 @@ import { readFileContent, putFile, deleteFile, checkStorage } from './storage.js
 import { HttpError } from './errors.js';
 import { config } from './config.js';
 import { CSV_HEADERS } from './importClasses.js';
-import { academicCalendarSchema } from '../shared/calendar.js';
+import { academicCalendarSchema, SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } from '../shared/calendar.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
@@ -96,6 +96,29 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('saves files and links to a newly created hexadecimal lesson ID and accepts mixed-case URLs on retry', async () => {
+    const lessonId = 'abcdef01-abcd-4abc-8def-abcdef012345';
+    const fileId = 'abcdef02-abcd-4abc-8def-abcdef012345';
+    const linkId = 'abcdef03-abcd-4abc-8def-abcdef012345';
+    const response = await call('/lessons', 'POST', { ...draft, id: lessonId.toUpperCase() });
+    expect(response.status).toBe(200);
+    expect((await response.json()).id).toBe(lessonId);
+    const form = () => {
+      const body = new FormData(); body.append('file', new Blob(['PDF']), 'Worksheet.pdf');
+      body.append('resourceId', fileId.toUpperCase()); return body;
+    };
+    expect((await call(`/lessons/${lessonId.toUpperCase()}/files`, 'POST', form())).status).toBe(200);
+    expect((await call(`/lessons/${lessonId}/files`, 'POST', form())).status).toBe(200);
+    expect(putFile).toHaveBeenCalledOnce();
+    const link = { id: linkId.toUpperCase(), kind: 'link', name: 'Reading', url: 'https://school.test/' };
+    expect((await call(`/lessons/${lessonId.toUpperCase()}/links`, 'POST', link)).status).toBe(200);
+    expect((await call(`/lessons/${lessonId}/links/${linkId.toUpperCase()}`, 'PUT', { ...link, name: 'New reading' })).status).toBe(200);
+    expect(state.lessons.find((item) => item.id === lessonId)).toMatchObject({
+      files: [{ id: fileId, name: 'Worksheet.pdf' }], links: [{ id: linkId, name: 'New reading' }],
+    });
+    expect((await call(`/lessons/${lessonId.toUpperCase()}/files/${fileId.toUpperCase()}`)).status).toBe(200);
+    expect(readFileContent).toHaveBeenCalledWith(fileId);
+  });
   it('uses a stable client lesson ID to reconcile a lost creation response without new occurrences', async () => {
     const body = { ...draft, id: uuid(83) };
     const first = await call('/lessons', 'POST', body);
@@ -452,6 +475,67 @@ describe('authenticated learning API', () => {
     expect(state.lessons).toHaveLength(0);
     expect(state.classes).toHaveLength(2);
     expect(state.slots).toEqual(seed.slots);
+  });
+  it('blocks year and term day exclusions, naming all affected lessons and dates without changing meetings', async () => {
+    const first = await (await call('/lessons', 'POST', draft)).json();
+    const second = await (await call('/lessons', 'POST', { ...draft, name: 'Following week', schedule: { ...draft.schedule, startDate: '2026-11-03' } })).json();
+    state.meetings = [{ occurrenceId: first.occurrences[0].id, lessonId: first.id, organizerUserId: 10, state: 'created', joinUrl: 'https://teams.microsoft.com/test' }];
+    const original = structuredClone(state);
+    current = user(10, ['Learn Admin']);
+    const week = { days: [0, 2, 3, 4], startsOn: 0 };
+    for (const calendar of [
+      { ...seed.calendar, years: seed.calendar!.years.map((year) => ({ ...year, week })) },
+      { ...seed.calendar, terms: seed.calendar!.terms.map((term) => ({ ...term, week })) },
+    ]) {
+      const response = await call('/admin/calendar', 'PUT', calendar);
+      expect(response.status).toBe(409);
+      const { error } = await response.json();
+      expect(error).toContain('"New lesson" (Maths)');
+      expect(error).toContain('"Following week" (Maths)');
+      expect(error).toContain('27/10/2026');
+      expect(error).toContain('03/11/2026');
+      expect(error).toContain('cancel their Teams meetings');
+    }
+    expect(second.occurrences).toHaveLength(1);
+    expect(saveCalendar).not.toHaveBeenCalled();
+    expect(state).toEqual(original);
+  });
+  it('blocks removing a later occurrence in a daily series even when its start remains eligible', async () => {
+    state.lessons = [];
+    for (const day of [2, 3, 4]) state.slots.push({ ...state.slots[0], id: uuid(100 + day), day });
+    expect((await call('/lessons', 'POST', { ...draft, schedule: { ...draft.schedule, frequency: 'daily', count: 8 } })).status).toBe(200);
+    current = user(10, ['Learn Admin']);
+    const calendar = { ...seed.calendar, terms: seed.calendar!.terms.map((term) => ({ ...term, week: { days: [1, 2, 3, 4], startsOn: 0 } })) };
+    const response = await call('/admin/calendar', 'PUT', calendar);
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain('02/11/2026');
+    expect(saveCalendar).not.toHaveBeenCalled();
+  });
+  it('saves year defaults and multiple term overrides with admin authorization and strict day validation', async () => {
+    const calendar = { ...seed.calendar, years: seed.calendar!.years.map((year) => ({ ...year, week: SUNDAY_TEACHING_WEEK })),
+      terms: [...seed.calendar!.terms, { id: uuid(73), yearId: uuid(70), name: 'Term 2', start: '2027-01-03', end: '2027-03-26', week: DEFAULT_TEACHING_WEEK },
+        { id: uuid(74), yearId: uuid(70), name: 'Term 3', start: '2027-04-04', end: '2027-06-25', week: DEFAULT_TEACHING_WEEK }] };
+    expect((await call('/admin/calendar', 'PUT', calendar)).status).toBe(403);
+    current = user(10, ['Learn Admin']);
+    const response = await call('/admin/calendar', 'PUT', calendar);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(calendar);
+    expect(state.calendar).toEqual(calendar);
+    expect((await call('/admin/calendar', 'PUT', { ...calendar, years: [{ ...calendar.years[0], week: { days: [], startsOn: 0 } }] })).status).toBe(400);
+    expect(saveCalendar).toHaveBeenCalledOnce();
+  });
+  it('previews and saves Sunday lessons on a configured teaching week, rejecting excluded Friday dates', async () => {
+    state.calendar = { ...seed.calendar!, years: seed.calendar!.years.map((year) => ({ ...year, week: SUNDAY_TEACHING_WEEK })) };
+    state.slots.push({ ...state.slots[0], id: uuid(75), day: 6 }, { ...state.slots[0], id: uuid(76), day: 4 });
+    const sunday = { ...draft, slotIds: [uuid(75)], schedule: { startDate: '2026-10-25', frequency: 'weekly', count: 2 } };
+    const preview = await call('/lessons/preview', 'POST', sunday);
+    expect(preview.status).toBe(200);
+    expect((await preview.json()).occurrences.map((item: { date: string }) => item.date)).toEqual(['2026-10-25', '2026-11-01']);
+    expect((await call('/lessons', 'POST', sunday)).status).toBe(200);
+    const friday = { ...draft, slotIds: [uuid(76)], schedule: { startDate: '2026-10-30', frequency: 'once', count: 1 } };
+    expect((await call('/lessons/preview', 'POST', friday)).status).toBe(400);
+    expect((await call('/lessons', 'POST', friday)).status).toBe(400);
+    expect(save).toHaveBeenCalledOnce();
   });
   it('requires cancelling live meetings before deleting lessons or changing class rosters', async () => {
     state.meetings = [{ occurrenceId: uuid(90), lessonId: uuid(6), organizerUserId: 10, state: 'pending', joinUrl: null }];

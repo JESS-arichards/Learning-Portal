@@ -16,12 +16,11 @@ describe('credential-only infrastructure configuration', () => {
       ENTRA_TENANT_ID: '00000000-0000-4000-8000-000000000001',
       ENTRA_CLIENT_ID: '00000000-0000-4000-8000-000000000002',
       ENTRA_CLIENT_SECRET: 'test-secret',
-      TEAMS_TOKEN_KEY: Buffer.alloc(32, 1).toString('base64'),
     };
     expect(environmentSchema.safeParse({ ...settings, ...teams }).success).toBe(true);
     expect(environmentSchema.safeParse({ ...settings, ENTRA_CLIENT_ID: teams.ENTRA_CLIENT_ID }).success).toBe(false);
     expect(environmentSchema.safeParse({ ...settings, ...teams, TEAMS_TOKEN_KEY: '' }).success).toBe(true);
-    expect(environmentSchema.safeParse({ ...settings, ...teams, TEAMS_TOKEN_KEY: 'invalid' }).success).toBe(false);
+    expect(environmentSchema.safeParse({ ...settings, ...teams, TEAMS_TOKEN_KEY: 'obsolete-and-ignored' }).success).toBe(true);
     expect(environmentSchema.safeParse({ ...settings, ...teams, ENTRA_TENANT_ID: 'common' }).success).toBe(false);
     expect(environmentSchema.safeParse({ ...settings, ALLOW_SCHEDULE_RESET: 'yes' }).success).toBe(false);
   });

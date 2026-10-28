@@ -78,7 +78,7 @@ it('keeps pending state after ambiguous Graph failure and retries with the same 
   expect((await post()).status).toBe(200);
   expect(mocks.create.mock.calls.map((call) => call[1].transactionId)).toEqual([uuid(3), uuid(3)]);
 });
-it('does not reserve a pending meeting before Microsoft calendar connection', async () => {
+it('does not reserve a pending meeting before Microsoft application access is configured', async () => {
   mocks.status.mockResolvedValue({ configured: false, connected: false });
   expect((await post()).status).toBe(409);
   expect(data.meetings).toEqual([]);
@@ -165,9 +165,17 @@ it('validates names and options before reserving or sending invitations', async 
   expect(data.meetings).toEqual([]);
   expect(mocks.create).not.toHaveBeenCalled();
 });
-it('requires renewed consent before sending invitations that need meeting options', async () => {
+it('requires application meeting-options access before sending invitations', async () => {
   mocks.status.mockResolvedValue({ configured: true, connected: true, meetingOptionsReady: false });
   expect((await post('', request)).status).toBe(409);
+  expect(data.meetings).toEqual([]);
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+it('surfaces the central verified-identity failure before reserving pending state', async () => {
+  mocks.status.mockResolvedValue({ configured: true, connected: false, meetingOptionsReady: false, error: 'Teacher has no verified school Microsoft identity.' });
+  const response = await post('', request);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: 'Teacher has no verified school Microsoft identity.' });
   expect(data.meetings).toEqual([]);
   expect(mocks.create).not.toHaveBeenCalled();
 });

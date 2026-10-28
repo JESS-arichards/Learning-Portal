@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Timetable } from './Timetable';
 import { DEFAULT_PERIOD_TYPES, type Snapshot, type Student, type User } from '../../shared/learning';
+import { SUNDAY_TEACHING_WEEK, type AcademicCalendar } from '../../shared/calendar';
 
 const child: Student = { email: 'pending@school.test', displayName: 'Pending Student' };
 const other: Student = { email: 'other@school.test', displayName: 'Other Student' };
@@ -28,7 +29,7 @@ function render(current: User, children: Student[]) {
 afterEach(() => vi.useRealTimers());
 
 describe('dated timetable', () => {
-  function dated(date: string, meeting: Partial<NonNullable<Snapshot['meetings']>[number]> = {}) {
+  function dated(date: string, meeting: Partial<NonNullable<Snapshot['meetings']>[number]> = {}, overrides: Partial<AcademicCalendar> = {}) {
     vi.useFakeTimers(); vi.setSystemTime(new Date(`${date}T04:30:00Z`));
     const snapshot: Snapshot = {
       ...data,
@@ -36,6 +37,7 @@ describe('dated timetable', () => {
         years: [{ id: 'year', name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
         terms: [{ id: 'term', yearId: 'year', name: 'Autumn', start: '2026-09-01', end: '2026-12-11' }],
         holidays: [{ id: 'holiday', yearId: 'year', name: 'Closure', start: '2026-11-09', end: '2026-11-09' }],
+        ...overrides,
       },
       lessons: [{ ...data.lessons[0], schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
         occurrences: [{ id: 'occurrence', date: '2026-10-26', slotId: 'period' }] }],
@@ -63,7 +65,8 @@ describe('dated timetable', () => {
     expect(html).not.toContain('Wednesday 2026-10-28');
     expect(html).toContain('<strong class="day-tab-heading">Wed - 28/10</strong><small>0 periods</small>');
     expect(html).toContain('<strong class="day-tab-heading">Mon - 26/10</strong>');
-    expect(html).toContain('<strong class="day-tab-heading">Sun - 01/11</strong>');
+    expect(html).toContain('<strong class="day-tab-heading">Fri - 30/10</strong>');
+    expect(html).not.toContain('<strong class="day-tab-heading">Sun - 01/11</strong>');
     expect(html).not.toContain('<small>28/10</small>');
   });
   it('does not repeat a one-off lesson on the same weekday next week', () => {
@@ -71,6 +74,14 @@ describe('dated timetable', () => {
     expect(html).not.toContain('Fractions');
     expect(html).not.toContain('Join live lesson');
     expect(html).toContain('No lesson scheduled');
+  });
+  it('hides excluded days and orders Sunday-Thursday from the configured week boundary', () => {
+    const html = dated('2026-10-28', {}, { years: [{ id: 'year', name: '2026/27', start: '2026-09-01', end: '2027-07-01', week: SUNDAY_TEACHING_WEEK }] });
+    expect(html).toContain('<strong class="day-tab-heading">Sun - 25/10</strong>');
+    expect(html.indexOf('Sun - 25/10')).toBeLessThan(html.indexOf('Mon - 26/10'));
+    expect(html).toContain('<strong class="day-tab-heading">Thu - 29/10</strong>');
+    expect(html).not.toContain('Fri - 30/10');
+    expect(html).not.toContain('Sat - 31/10');
   });
   it('shows holidays and outside-term dates without teaching periods or highlights', () => {
     const holiday = dated('2026-11-09');

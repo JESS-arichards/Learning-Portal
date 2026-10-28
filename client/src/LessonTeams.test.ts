@@ -43,11 +43,15 @@ it('stages meeting name and breakout options before the lesson exists without se
   expect(onStage).toHaveBeenCalledExactlyOnceWith({ title: 'Group workshop', options: { allowBreakoutRooms: true } });
   expect(state.api).not.toHaveBeenCalled();
 });
-it('permits configuration before connecting but makes reconnect requirements clear', () => {
+it('permits staging without teacher connection and directs application access failures to administrators', () => {
   render(); state.values[0] = { configured: true, connected: true, meetingOptionsReady: false };
   expect(find(render(), (props) => props.children === 'Add Teams meetings on save')?.disabled).toBe(false);
-  expect(find(render(), (props) => props.className === 'alert')?.children).toContain('OnlineMeetings.ReadWrite');
-  expect(find(render(), (props) => props.href === '/api/teams/connect')?.target).toBe('_blank');
+  expect(find(render(), (props) => props.className === 'alert')?.children).toContain('application permissions');
+  expect(find(render(), (props) => props.href === '/api/teams/connect')).toBeNull();
+});
+it('shows actionable central identity and application access errors', () => {
+  render(); state.values[0] = { configured: true, connected: false, meetingOptionsReady: false, error: 'Teacher has no verified school Microsoft identity.' };
+  expect(find(render(), (props) => props.role === 'alert')?.children).toBe('Teacher has no verified school Microsoft identity.');
 });
 it('does not expose meeting configuration to unassigned staff', () => {
   data.classes[0].teachers = [];
