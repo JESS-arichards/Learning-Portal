@@ -1,16 +1,19 @@
 import { useEffect, useId, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
 import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass } from '../../shared/learning';
+import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday } from '../../shared/calendar';
 
 const schoolClock = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Dubai', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 });
 function schoolTime() {
-  const parts = schoolClock.formatToParts(new Date());
+  const now = new Date();
+  const parts = schoolClock.formatToParts(now);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((value) => value.type === type)?.value;
   return {
     day: DAYS.findIndex((name) => name === part('weekday')),
     time: `${part('hour')}:${part('minute')}`,
+    date: schoolDate(now),
   };
 }
 
@@ -26,7 +29,7 @@ export function Resources({ lesson }: { lesson: Lesson }) {
     </div>
   );
 }
-function LessonCard({ lesson, classroom }: { lesson: Lesson; classroom: LearningClass }) {
+function LessonCard({ lesson, classroom, joinUrl }: { lesson: Lesson; classroom: LearningClass; joinUrl?: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const hasDetails = Boolean(lesson.description || lesson.files.length || lesson.links.length);
@@ -35,6 +38,7 @@ function LessonCard({ lesson, classroom }: { lesson: Lesson; classroom: Learning
     <div className="lesson-card-body">
       <p className="eyebrow">{classroom.name}</p><h3>{lesson.name}</h3>
       <p className="teacher">{classroom.teachers.map((t) => t.displayName).join(', ')}</p>
+      {joinUrl && <a className="btn primary" href={joinUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} /> Join live lesson</a>}
       {hasDetails && <button className="text-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={detailId}>
         {expanded ? 'Hide lesson details' : `View lesson${lesson.files.length + lesson.links.length ? ` & ${lesson.files.length + lesson.links.length} resources` : ''}`}
       </button>}
@@ -45,7 +49,13 @@ function LessonCard({ lesson, classroom }: { lesson: Lesson; classroom: Learning
 export function Timetable({ data, user, children }: { data: Snapshot; user: User; children: Student[] }) {
   const [childEmail, setChildEmail] = useState<string | null>(null);
   const [clock, setClock] = useState(schoolTime);
-  const [day, setDay] = useState(clock.day);
+  const [legacyDay, setDay] = useState(clock.day);
+  const [date, setDate] = useState(schoolDate);
+  const dated = Boolean(data.calendar?.years.length);
+  const day = dated ? weekday(date) : legacyDay;
+  const calendar = data.calendar ?? EMPTY_CALENDAR;
+  const status = dayStatus(calendar, date);
+  const weekStart = addDays(date, -day);
   useEffect(() => {
     const timer = setInterval(() => {
       const next = schoolTime();
@@ -60,8 +70,11 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
     ? data.classes.filter((c) => selected && c.students.some((s) => normaliseEmail(s.email) === normaliseEmail(selected.email)))
     : data.classes.filter((c) => c.students.some((s) => isEnrolledStudent(user, s)) || canManage(user, c));
   const lessons = data.lessons.filter((l) => classes.some((c) => c.id === l.classId));
-  const slots = data.slots.filter((s) => s.day === day).sort((a, b) => a.start.localeCompare(b.start));
-  const lessonCount = lessons.filter((l) => l.slotIds.some((id) => slots.some((s) => s.id === id))).length;
+  const slots = data.slots.filter((s) => s.day === day && (!dated || status.teaching)).sort((a, b) => a.start.localeCompare(b.start));
+  const onDate = (lesson: Lesson, slotId?: string) => dated
+    ? lesson.occurrences?.some((item) => item.date === date && (!slotId || item.slotId === slotId))
+    : lesson.slotIds.some((id) => (!slotId || id === slotId) && slots.some((slot) => slot.id === id));
+  const lessonCount = lessons.filter((lesson) => onDate(lesson)).length;
   return <>
     <div className="page-heading"><div><p className="eyebrow">YOUR LEARNING, AT A GLANCE</p><h1>{parentView ? 'Family learning' : 'My timetable'}</h1><p className="muted">A clear view of the week ahead. All times are school local time.</p></div><div className="heading-icon"><BookOpen /></div></div>
     {user.roles.includes('Parent') && (user.roles.includes('Staff') || user.roles.includes('Student')) && <div className="segmented" aria-label="Timetable view">
@@ -78,25 +91,37 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
         <p className="small muted"><Users size={14} /> Family links are managed by your school.</p>
       </aside>}
       <section className="timetable-area" aria-label={parentView ? `${selected?.displayName ?? 'Child'} timetable` : 'My timetable'}>
-        {parentView && selected && <div className="child-heading"><span className="initials">{selected.displayName[0]}</span><div><h2>{selected.displayName}</h2><span className="muted">Weekly learning timetable</span></div></div>}
-        <div className="week-heading"><div><h2>Your weekly rhythm</h2><p className="muted">The weekly schedule repeats until your teacher updates it.</p></div><span className="pill"><Clock3 size={14} /> Weekly timetable</span></div>
+        {parentView && selected && <div className="child-heading"><span className="initials">{selected.displayName[0]}</span><div><h2>{selected.displayName}</h2><span className="muted">{dated ? 'Dated learning timetable' : 'Weekly learning timetable'}</span></div></div>}
+        <div className="week-heading"><div><h2>{dated ? 'Your learning calendar' : 'Your weekly rhythm'}</h2><p className="muted">{dated ? 'Dated lessons follow school terms and holidays.' : 'Legacy weekly view. An administrator must configure the academic calendar for dated lessons.'}</p></div><span className="pill"><Clock3 size={14} /> {dated ? status.term?.name ?? 'Outside term' : 'Weekly timetable'}</span></div>
+        {dated && <div className="date-navigation">
+          <button className="btn secondary" onClick={() => setDate(addDays(date, -7))}>Previous week</button>
+          <label>Timetable date<input type="date" required value={date} onChange={(event) => { if (event.target.value) setDate(event.target.value); }} /></label>
+          <button className="btn secondary" onClick={() => setDate(schoolDate())}>Today</button>
+          <button className="btn secondary" onClick={() => setDate(addDays(date, 7))}>Next week</button>
+        </div>}
         <div className="day-tabs" aria-label="Day of the week">{DAYS.map((name, index) => {
-          const daySlots = data.slots.filter((s) => s.day === index && s.kind === 'lesson');
+          const tabDate = addDays(weekStart, index);
+          const daySlots = data.slots.filter((s) => s.day === index && s.kind === 'lesson' && (!dated || dayStatus(calendar, tabDate).teaching));
           const registrations = daySlots.filter((slot) => data.periodTypes
             .find((type) => type.id === periodTypeId(slot))?.name.trim().toLowerCase() === 'registration').length;
           const periods = daySlots.length - registrations;
-          return <button key={name} onClick={() => setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}><span>{name.slice(0, 3)}</span><small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
+          return <button key={name} onClick={() => dated ? setDate(tabDate) : setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}><span>{name.slice(0, 3)}</span>{dated && <small>{tabDate.slice(8)}/{tabDate.slice(5, 7)}</small>}<small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
         })}</div>
-        <div className="day-summary"><h2>{DAYS[day]}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
+        <div className="day-summary"><h2>{DAYS[day]}{dated && ` ${date}`}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
+        {dated && !status.teaching && <p className="alert" role="status">{status.holiday ? `Holiday: ${status.holiday.name}` : weekday(date) >= 5 ? 'Weekend - no teaching.' : 'Outside school terms - no teaching.'}</p>}
         <div className="timeline">
           {slots.map((slot) => {
-            const scheduled = lessons.filter((l) => l.slotIds.includes(slot.id));
-            const current = slot.day === clock.day && slot.start <= clock.time && clock.time < slot.end;
+            const scheduled = lessons.filter((lesson) => onDate(lesson, slot.id));
+            const current = (!dated || date === clock.date) && slot.day === clock.day && slot.start <= clock.time && clock.time < slot.end;
             return <div key={slot.id} className={`timeline-row ${slot.kind}${current ? ' current-period' : ''}`} aria-current={current ? 'time' : undefined}>
               <div className="time"><strong>{slot.start}</strong><span>{slot.end}</span></div>
               <div className="period-content"><div className="period-label">{slot.name}<span className="pill">{data.periodTypes.find((type) => type.id === periodTypeId(slot))?.name}</span>{current && <span className="current-period-label">Now</span>}</div>
                 {slot.kind === 'break' ? <div className="break-card"><span aria-hidden="true">&#9749;</span> Take a break. Recharge for what comes next.</div>
-                  : scheduled.length ? scheduled.map((lesson) => <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} />)
+                  : scheduled.length ? scheduled.map((lesson) => {
+                    const occurrence = lesson.occurrences?.find((item) => item.date === date && item.slotId === slot.id);
+                    const meeting = data.meetings?.find((item) => item.occurrenceId === occurrence?.id && item.state === 'created');
+                    return <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} joinUrl={meeting?.joinUrl} />;
+                  })
                     : <div className="free-period">No lesson scheduled</div>}
               </div>
             </div>;

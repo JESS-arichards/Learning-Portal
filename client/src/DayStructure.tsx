@@ -53,7 +53,7 @@ export function DayStructure({ data, refresh }: { data: Snapshot; refresh: () =>
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const saving = useRef(false);
-  const used = new Set(data.lessons.flatMap((lesson) => lesson.slotIds));
+  const used = new Set(data.lessons.flatMap((lesson) => [...lesson.slotIds, ...(lesson.occurrences ?? []).map((item) => item.slotId)]));
   const lockedType = (id: string) => saved.slots.some((slot) => used.has(slot.id) && periodTypeId(slot) === id);
   const dirty = JSON.stringify(slots) !== JSON.stringify(saved.slots);
   function change(id: string, patch: Partial<DaySlot>) {

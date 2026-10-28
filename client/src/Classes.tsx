@@ -3,12 +3,19 @@ import { Plus, Upload, Trash2, Users, BookOpen, Pencil } from 'lucide-react';
 import { DAYS, canManage, lessonInputSchema, type User, type Snapshot, type Lesson, type LearningClass, type LessonInput } from '../../shared/learning';
 import { api, errorMessage, fileBody } from './api';
 import { Resources } from './Timetable';
+import { LessonSchedule } from './LessonSchedule';
+import { LessonTeams } from './LessonTeams';
+import { schoolDate, EMPTY_CALENDAR, previewSchedule } from '../../shared/calendar';
 
-function LessonEditor({ lesson, classroom, data, onClose, refresh }: {
-  lesson?: Lesson; classroom: LearningClass; data: Snapshot; onClose: () => void; refresh: () => Promise<void>;
+function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
+  lesson?: Lesson; classroom: LearningClass; data: Snapshot; user: User; onClose: () => void; refresh: () => Promise<void>;
 }) {
   const [saved, setSaved] = useState(lesson);
-  const [draft, setDraft] = useState<LessonInput>(lesson ?? { classId: classroom.id, name: '', description: '', slotIds: [], links: [] });
+  const [draft, setDraft] = useState<LessonInput>({
+    classId: classroom.id, name: lesson?.name ?? '', description: lesson?.description ?? '',
+    slotIds: lesson?.schedule ? lesson.slotIds : [], links: lesson?.links ?? [],
+    schedule: lesson?.schedule ?? { startDate: schoolDate(), frequency: 'once', count: 1 },
+  });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -16,8 +23,10 @@ function LessonEditor({ lesson, classroom, data, onClose, refresh }: {
     event.preventDefault(); setBusy(true); setError(''); setNotice('');
     try {
       const input = lessonInputSchema.parse(draft);
+      const preview = previewSchedule(data.calendar ?? EMPTY_CALENDAR, data.slots, input.slotIds, input.schedule!);
+      if (preview.truncated && !window.confirm(`This series stops at term end ${preview.termEnd}, earlier than requested ${preview.requestedEnd}. Actual final lesson date: ${preview.actualEnd}. Continue?`)) return;
       const result = await api<Lesson>(saved ? `/lessons/${saved.id}` : '/lessons', saved ? 'PUT' : 'POST', input);
-      setSaved(result); await refresh(); setNotice('Lesson saved. You can now attach files below.');
+      setSaved(result); await refresh(); setNotice(`Lesson saved with ${result.occurrences?.length ?? 0} period occurrences. Actual final date: ${result.occurrences?.at(-1)?.date}. You can attach files and create Teams meetings below.`);
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -47,13 +56,7 @@ function LessonEditor({ lesson, classroom, data, onClose, refresh }: {
     <form onSubmit={(event) => void submit(event)}>
       <label>Lesson name<input required maxLength={200} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
       <label>Description<textarea rows={4} maxLength={10000} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What will students learn? Include instructions and preparation." /></label>
-      <fieldset><legend>Schedule this lesson in one or more weekly periods</legend>
-        <div className="slot-options">{DAYS.map((day, index) => {
-          const slots = data.slots.filter((s) => s.day === index && s.kind === 'lesson').sort((a, b) => a.start.localeCompare(b.start));
-          return slots.length ? <div key={day}><strong>{day}</strong>{slots.map((slot) => <label key={slot.id} className="checkbox"><input type="checkbox" checked={draft.slotIds.includes(slot.id)} onChange={(e) => setDraft({ ...draft, slotIds: e.target.checked ? [...draft.slotIds, slot.id] : draft.slotIds.filter((s) => s !== slot.id) })} /><span>{slot.name}<small>{slot.start} - {slot.end}</small></span></label>)}</div> : null;
-        })}</div>
-        {!data.slots.some((s) => s.kind === 'lesson') && <p className="alert">An administrator must set up lesson periods before lessons can be scheduled.</p>}
-      </fieldset>
+      <LessonSchedule schedule={draft.schedule!} slotIds={draft.slotIds} slots={data.slots} calendar={data.calendar} onChange={(schedule, slotIds) => setDraft({ ...draft, schedule, slotIds })} />
       <fieldset><legend>External &amp; Microsoft Teams links</legend>
         {draft.links.map((link, index) => <div key={link.id} className="link-editor">
           <label>Type<select value={link.kind} onChange={(e) => setDraft({ ...draft, links: draft.links.map((l, i) => i === index ? { ...l, kind: e.target.value === 'teams' ? 'teams' : 'link' } : l) })}><option value="link">External link</option><option value="teams">Microsoft Teams</option></select></label>
@@ -65,6 +68,7 @@ function LessonEditor({ lesson, classroom, data, onClose, refresh }: {
       </fieldset>
       <button className="btn primary" disabled={busy}>{busy ? 'Saving...' : 'Save lesson'}</button>
     </form>
+    {saved && <LessonTeams lesson={saved} data={data} user={user} refresh={refresh} />}
     {saved && <section className="file-editor"><h3>Uploaded resources</h3><p className="muted">Up to 20 files, 25 MB each. PDF, Office, text, images, MP3 or MP4. Images are optimized before saving to private Azure Blob Storage.</p>
       <label className="upload-field"><Upload size={20} /> Add a resource file<input type="file" disabled={busy} accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.mp3,.mp4" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /></label>
       {saved.files.map((file) => <div className="file-row" key={file.id}><span>{file.name}</span><button className="text-button danger" disabled={busy} onClick={() => void removeFile(file.id)}>Remove</button></div>)}
@@ -93,11 +97,12 @@ export function Classes({ data, user, refresh }: { data: Snapshot; user: User; r
       <div className="class-selector"><label>Class<select value={classroom.id} onChange={(e) => { setClassId(e.target.value); setEditor(null); setError(''); }}>{classes.map((c) => <option key={c.id} value={c.id}>{c.name} / {c.yearGroup} / {c.division}</option>)}</select></label><span className="pill">{classroom.students.length} {classroom.students.length === 1 ? 'student' : 'students'}</span></div>
       <div className="class-overview panel"><div><p className="eyebrow">{classroom.division} &middot; {classroom.yearGroup}</p><h2>{classroom.name}</h2><p className="muted">{classroom.teachers.map((t) => t.displayName).join(', ')}</p></div><button className="btn primary" disabled={busy} onClick={() => setEditor('new')}><Plus size={17} /> Create lesson</button></div>
       {error && <p role="alert" className="alert error">{error}</p>}
-      {editor !== null && <LessonEditor key={editor === 'new' ? `new-${classroom.id}` : editor.id} lesson={editor === 'new' ? undefined : editor} classroom={classroom} data={data} onClose={() => setEditor(null)} refresh={refresh} />}
+      {editor !== null && <LessonEditor key={editor === 'new' ? `new-${classroom.id}` : editor.id} lesson={editor === 'new' ? undefined : editor} classroom={classroom} data={data} user={user} onClose={() => setEditor(null)} refresh={refresh} />}
       <div className="section-heading"><h2>Class lessons</h2><span className="muted">{data.lessons.filter((l) => l.classId === classroom.id).length} published</span></div>
       <div className="lesson-grid">{data.lessons.filter((l) => l.classId === classroom.id).map((lesson) => <article key={lesson.id} className="panel managed-lesson">
         <div className="lesson-icon"><BookOpen size={20} /></div><h3>{lesson.name}</h3><p className="description">{lesson.description}</p>
         <div className="schedule-pills">{lesson.slotIds.map((id) => { const s = data.slots.find((s) => s.id === id); return s ? <span className="pill" key={id}>{DAYS[s.day].slice(0, 3)} {s.start}</span> : null; })}</div>
+        <p className="small muted">{lesson.schedule ? `${lesson.schedule.frequency}: ${lesson.schedule.startDate} to ${lesson.occurrences?.at(-1)?.date} (${lesson.occurrences?.length ?? 0} period occurrences)` : 'Legacy weekly lesson - replace with a dated schedule.'}</p>
         <Resources lesson={lesson} /><div className="card-actions"><button className="btn secondary" disabled={busy} onClick={() => setEditor(lesson)}><Pencil size={15} /> Edit</button><button className="text-button danger" disabled={busy} onClick={() => void deleteLesson(lesson)}>Delete lesson</button></div>
       </article>)}</div>
       {!data.lessons.some((l) => l.classId === classroom.id) && <div className="empty panel"><BookOpen size={30} /><h3>A fresh start for this class</h3><p className="muted">Create a lesson, choose weekly periods and add resources.</p></div>}

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type sql from 'mssql';
 
 vi.mock('./db.js', async () => ({ sql: (await import('mssql')).default, transaction: vi.fn() }));
-import { snapshot, save, saveStructure, remove } from './repository.js';
+import { snapshot, save, saveStructure, saveCalendar, remove } from './repository.js';
 import { DEFAULT_PERIOD_TYPES, type LearningClass, type Lesson } from '../shared/learning.js';
 
 // Explicit opt-in; this suite creates its own LocalDB instance and never uses application credentials.
@@ -58,7 +58,7 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     const request = {
       input(name: string, _type: unknown, value: unknown) { inputs.set(name, value); return request; },
       async query(query: string) {
-        const parameters = [...inputs].map(([name, value]) => `DECLARE @${name} nvarchar(max)=${quote(String(value))};`).join('\n');
+        const parameters = [...inputs].map(([name, value]) => `DECLARE @${name} nvarchar(max)=${value === null ? 'NULL' : quote(String(value))};`).join('\n');
         run(`SET XACT_ABORT ON; BEGIN TRANSACTION;\n${parameters}\n${query}\nCOMMIT;`);
         return {};
       },
@@ -69,7 +69,7 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     const connection = { request: () => ({
       async query(query: string) {
         const selects = query.split(';').map((part) => part.trim()).filter(Boolean);
-        const text = selects.map((select) => `SET @result += (${select} FOR JSON PATH) + N',';`).join('\n');
+        const text = selects.map((select) => `SET @result += COALESCE((${select} FOR JSON PATH),N'[]') + N',';`).join('\n');
         const json = run(`DECLARE @result nvarchar(max)=N'['; ${text}
           SET @result=LEFT(@result,LEN(@result)-1)+N']'; SELECT @result;`);
         return { recordsets: JSON.parse(json) };
@@ -182,5 +182,35 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     await saveStructure(transaction(), { slots: [], periodTypes: DEFAULT_PERIOD_TYPES });
     await remove(transaction(), 'class', classroom.id);
     expect(run('SELECT COUNT(*) FROM dbo.LearningClassStudents;')).toBe('0');
+  });
+  it('round-trips the calendar and dated series, preserving occurrence IDs on resource edits', async () => {
+    reset(); run(schema); run(schema);
+    const calendar = {
+      years: [{ id: uuid(30), name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
+      terms: [{ id: uuid(31), yearId: uuid(30), name: 'Autumn', start: '2026-09-01', end: '2026-12-11' }],
+      holidays: [{ id: uuid(32), yearId: uuid(30), name: 'Closure', start: '2026-10-28', end: '2026-10-28' }],
+    };
+    await saveCalendar(transaction(), calendar);
+    await save(transaction(), 'class', classroom.id, classroom);
+    await saveStructure(transaction(), { slots: [slot], periodTypes: DEFAULT_PERIOD_TYPES });
+    const dated: Lesson = { ...lesson, schedule: { startDate: '2026-10-26', frequency: 'weekly', count: 2 },
+      occurrences: [{ id: uuid(33), date: '2026-10-26', slotId: slot.id }, { id: uuid(34), date: '2026-11-02', slotId: slot.id }] };
+    await save(transaction(), 'lesson', dated.id, dated);
+    let data = await readSnapshot();
+    expect(data.calendar).toEqual(calendar);
+    expect(data.lessons[0].schedule).toEqual(dated.schedule);
+    expect(data.lessons[0].occurrences).toEqual(dated.occurrences);
+    run(`INSERT dbo.LearningLiveMeetings(OccurrenceId,OrganizerUserId,State,EventId,JoinUrl)
+      VALUES('${uuid(33)}',12,'created',N'event-one',N'https://teams.microsoft.com/test');`);
+    await save(transaction(), 'lesson', dated.id, { ...dated, files: [] });
+    data = await readSnapshot();
+    expect(data.meetings?.[0]).toMatchObject({ occurrenceId: uuid(33), state: 'created' });
+    expect(data.lessons[0].occurrences).toEqual(dated.occurrences);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningTeamsConnections;')).toBe('0');
+    await expect(saveStructure(transaction(), { slots: [], periodTypes: DEFAULT_PERIOD_TYPES })).rejects.toThrow();
+    run("UPDATE dbo.LearningLiveMeetings SET State='cancelled',JoinUrl=NULL;");
+    await remove(transaction(), 'lesson', dated.id);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningOccurrences;')).toBe('0');
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLiveMeetings;')).toBe('0');
   });
 });

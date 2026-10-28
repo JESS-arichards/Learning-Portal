@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PortalMenuItem } from './portalMenu.js';
+import { recurrenceSchema, occurrenceSchema, type AcademicCalendar, type Occurrence } from './calendar.js';
 
 export const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 export function normaliseEmail(email: string): string { return email.trim().toLowerCase(); }
@@ -153,15 +154,25 @@ export const lessonInputSchema = z.object({
   description: z.string().trim().max(10000),
   slotIds: z.array(z.string().uuid()).min(1).max(140).refine((ids) => new Set(ids).size === ids.length, 'Duplicate lesson slots.'),
   links: z.array(linkSchema).max(30),
+  schedule: recurrenceSchema.optional(),
 }).strict();
 export type LessonInput = z.infer<typeof lessonInputSchema>;
 export const lessonSchema = lessonInputSchema.extend({
   id: z.string().uuid(), files: z.array(fileSchema), updatedAt: z.string(),
+  occurrences: z.array(occurrenceSchema).optional(),
 });
 export type Lesson = z.infer<typeof lessonSchema>;
-export interface Snapshot { classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[] }
+export interface LiveMeeting {
+  occurrenceId: string; lessonId: string; organizerUserId: number;
+  state: 'pending' | 'created' | 'cancelled';
+  joinUrl: string | null;
+}
+export interface Snapshot {
+  classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[];
+  calendar?: AcademicCalendar; meetings?: LiveMeeting[]; allowScheduleReset?: boolean;
+}
 export function validateStructureChange(current: Snapshot, next: Pick<Snapshot, 'slots' | 'periodTypes'>): void {
-  const used = new Set(current.lessons.flatMap((lesson) => lesson.slotIds));
+  const used = new Set(current.lessons.flatMap((lesson) => [...lesson.slotIds, ...(lesson.occurrences ?? []).map((item) => item.slotId)]));
   for (const slot of current.slots.filter((slot) => used.has(slot.id))) {
     const updated = next.slots.find((item) => item.id === slot.id);
     const type = current.periodTypes.find((type) => type.id === periodTypeId(slot));
@@ -198,14 +209,20 @@ export function mayViewStudent(user: User, student: Student): boolean {
     || isAdmin(user);
 }
 
-export function validateSchedule(lesson: LessonInput, lessons: Lesson[], classes: LearningClass[], slots: DaySlot[], excludeId?: string): void {
+export function validateSchedule(lesson: LessonInput & { occurrences?: Occurrence[] }, lessons: Lesson[], classes: LearningClass[], slots: DaySlot[], excludeId?: string): void {
   const classroom = classes.find((c) => c.id === lesson.classId);
   if (!classroom) throw new Error('Class not found.');
   if (lesson.slotIds.some((id) => !slots.some((s) => s.id === id && s.kind === 'lesson'))) {
     throw new Error('Choose existing lesson periods, not breaks.');
   }
   for (const other of lessons) {
-    if (other.id === excludeId || !other.slotIds.some((id) => lesson.slotIds.includes(id))) continue;
+    if (other.id === excludeId) continue;
+    const dated = lesson.occurrences;
+    const clashes = dated && other.occurrences
+      ? dated.some((a) => other.occurrences!.some((b) => a.date === b.date
+        && slots.some((left) => left.id === a.slotId && slots.some((right) => right.id === b.slotId && left.start < right.end && right.start < left.end))))
+      : other.slotIds.some((id) => lesson.slotIds.includes(id));
+    if (!clashes) continue;
     const otherClass = classes.find((c) => c.id === other.classId);
     if (!otherClass) throw new Error('An existing lesson references an unknown class.');
     if (classroom.id === otherClass.id

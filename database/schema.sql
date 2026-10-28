@@ -435,6 +435,51 @@ BEGIN TRY
       #Students, #Teachers, #Classes, #Fields, #Nodes, #LegacyDocuments;
   END;
 
+  IF COL_LENGTH('dbo.LearningLessons', 'Schedule') IS NULL
+    ALTER TABLE dbo.LearningLessons ADD Schedule nvarchar(max) NULL
+      CONSTRAINT CK_LearningLessons_Schedule CHECK (Schedule IS NULL OR ISJSON(Schedule)=1);
+
+  IF OBJECT_ID(N'dbo.LearningAcademicYears', N'U') IS NULL
+    CREATE TABLE dbo.LearningAcademicYears (
+      Id uniqueidentifier NOT NULL PRIMARY KEY, Name nvarchar(100) NOT NULL,
+      StartDate date NOT NULL, EndDate date NOT NULL, CHECK (StartDate<=EndDate)
+    );
+  IF OBJECT_ID(N'dbo.LearningTerms', N'U') IS NULL
+    CREATE TABLE dbo.LearningTerms (
+      Id uniqueidentifier NOT NULL PRIMARY KEY, YearId uniqueidentifier NOT NULL REFERENCES dbo.LearningAcademicYears(Id),
+      Name nvarchar(100) NOT NULL, StartDate date NOT NULL, EndDate date NOT NULL, CHECK (StartDate<=EndDate)
+    );
+  IF OBJECT_ID(N'dbo.LearningHolidays', N'U') IS NULL
+    CREATE TABLE dbo.LearningHolidays (
+      Id uniqueidentifier NOT NULL PRIMARY KEY, YearId uniqueidentifier NOT NULL REFERENCES dbo.LearningAcademicYears(Id),
+      Name nvarchar(100) NOT NULL, StartDate date NOT NULL, EndDate date NOT NULL, CHECK (StartDate<=EndDate)
+    );
+  IF OBJECT_ID(N'dbo.LearningOccurrences', N'U') IS NULL
+    CREATE TABLE dbo.LearningOccurrences (
+      Id uniqueidentifier NOT NULL PRIMARY KEY,
+      LessonId uniqueidentifier NOT NULL REFERENCES dbo.LearningLessons(Id) ON DELETE CASCADE,
+      PeriodId uniqueidentifier NOT NULL REFERENCES dbo.LearningPeriods(Id),
+      LessonDate date NOT NULL, UNIQUE(LessonId,LessonDate,PeriodId)
+    );
+  IF OBJECT_ID(N'dbo.LearningLiveMeetings', N'U') IS NULL
+    CREATE TABLE dbo.LearningLiveMeetings (
+      OccurrenceId uniqueidentifier NOT NULL PRIMARY KEY REFERENCES dbo.LearningOccurrences(Id) ON DELETE CASCADE,
+      OrganizerUserId int NOT NULL, State varchar(10) NOT NULL CHECK (State IN ('pending','created','cancelled')),
+      EventId nvarchar(2048) NULL, JoinUrl nvarchar(2000) NULL,
+      UpdatedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+  IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=2)
+    INSERT dbo.LearningSchemaMigrations(Version) VALUES(2);
+
+  IF OBJECT_ID(N'dbo.LearningTeamsConnections', N'U') IS NULL
+    CREATE TABLE dbo.LearningTeamsConnections (
+      UserId int NOT NULL CONSTRAINT PK_LearningTeamsConnections PRIMARY KEY,
+      Payload nvarchar(max) NOT NULL,
+      UpdatedAt datetime2(7) NOT NULL CONSTRAINT DF_LearningTeamsConnections_UpdatedAt DEFAULT SYSUTCDATETIME(),
+      CONSTRAINT CK_LearningTeamsConnections_UserId CHECK (UserId > 0),
+      CONSTRAINT CK_LearningTeamsConnections_Payload CHECK (Payload LIKE N'v1.%')
+    );
+
   COMMIT TRANSACTION;
 END TRY
 BEGIN CATCH

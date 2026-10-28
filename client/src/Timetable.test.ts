@@ -27,6 +27,44 @@ function render(current: User, children: Student[]) {
 }
 afterEach(() => vi.useRealTimers());
 
+describe('dated timetable', () => {
+  function dated(date: string) {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(`${date}T04:30:00Z`));
+    const snapshot: Snapshot = {
+      ...data,
+      calendar: {
+        years: [{ id: 'year', name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
+        terms: [{ id: 'term', yearId: 'year', name: 'Autumn', start: '2026-09-01', end: '2026-12-11' }],
+        holidays: [{ id: 'holiday', yearId: 'year', name: 'Closure', start: '2026-11-09', end: '2026-11-09' }],
+      },
+      lessons: [{ ...data.lessons[0], schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
+        occurrences: [{ id: 'occurrence', date: '2026-10-26', slotId: 'period' }] }],
+      meetings: [{ occurrenceId: 'occurrence', lessonId: 'first', organizerUserId: 1, state: 'created', joinUrl: 'https://teams.microsoft.com/test' }],
+    };
+    return renderToStaticMarkup(createElement(Timetable, { data: snapshot, user, children: [child] }));
+  }
+  it('shows only this date’s lessons and its live join link', () => {
+    const html = dated('2026-10-26');
+    expect(html).toContain('Fractions');
+    expect(html).toContain('Join live lesson');
+    expect(html).toContain('2026-10-26');
+    expect(html).toContain('current-period');
+  });
+  it('does not repeat a one-off lesson on the same weekday next week', () => {
+    const html = dated('2026-11-02');
+    expect(html).not.toContain('Fractions');
+    expect(html).not.toContain('Join live lesson');
+    expect(html).toContain('No lesson scheduled');
+  });
+  it('shows holidays and outside-term dates without teaching periods or highlights', () => {
+    const holiday = dated('2026-11-09');
+    expect(holiday).toContain('Holiday: Closure');
+    expect(holiday).not.toContain('current-period');
+    expect(holiday).not.toContain('Fractions');
+    expect(dated('2026-12-14')).toContain('Outside school terms');
+  });
+});
+
 describe('day tab period counts', () => {
   const registrationType = { id: 'registration', name: 'Registration', kind: 'lesson' as const };
   function counts(periodCount: number, registrationCount: number, typeName = 'Registration') {

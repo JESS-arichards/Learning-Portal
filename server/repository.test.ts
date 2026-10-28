@@ -34,6 +34,7 @@ function records(): unknown[][] {
     [{ lessonId: lesson.id, periodId: uuid(2) }],
     [{ lessonId: lesson.id, ...lesson.links[0] }],
     [{ lessonId: lesson.id, ...lesson.files[0] }],
+    [], [], [], [], [], [],
   ];
 }
 beforeEach(() => {

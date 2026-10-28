@@ -17,6 +17,10 @@ import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
 import { canManage, classKey, classInputSchema, lessonInputSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { EMPTY_CALENDAR, previewSchedule } from '../shared/calendar.js';
+import { createCalendarRouter } from './calendarRoutes.js';
+import { createTeamsRouter } from './teams.js';
+import { createLiveLessonRouter } from './liveLessons.js';
 
 const idSchema = z.string().uuid();
 function id(value: unknown) { return idSchema.parse(value); }
@@ -84,6 +88,7 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     res.json({ status: 'ok' });
   });
   app.use('/api/auth', createSsoRouter());
+  app.use('/api/teams', createTeamsRouter());
   app.post(['/api/auth/entra', '/api/auth/otp/request', '/api/auth/otp/verify'], (_req, _res) => {
     throw new HttpError(410, 'Sign-in is managed by Applications Portal. Open Learning Portal to be redirected.');
   });
@@ -100,8 +105,10 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
   });
   api.get('/learning', async (req, res) => {
     const all = await snapshot();
-    res.json({ ...visibleSnapshot(req.user!, all), children: childrenFor(req.user!, all) });
+    res.json({ ...visibleSnapshot(req.user!, all), children: childrenFor(req.user!, all), allowScheduleReset: config.ALLOW_SCHEDULE_RESET });
   });
+  api.use(createCalendarRouter());
+  api.use(createLiveLessonRouter());
   api.get('/admin/template.csv', requireAdmin, (_req, res) => {
     res.type('text/csv').attachment('learning-classes-template.csv').send(CSV_HEADERS.join(',') + '\r\n');
   });
@@ -123,6 +130,8 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     const saved = { ...classroom, id: classId };
     await transaction(async (tx) => {
       const current = await snapshot(tx);
+      if (current.meetings?.some((meeting) => meeting.state !== 'cancelled' && current.lessons.some((l) => l.id === meeting.lessonId && l.classId === classId)))
+        throw new HttpError(409, 'Cancel live meetings for this class before changing its roster.');
       if (req.params.id && !current.classes.some((item) => item.id === classId)) throw new HttpError(404, 'Class not found.');
       if (current.classes.some((item) => item.id !== classId && classKey(item) === classKey(saved)))
         throw new HttpError(409, 'A class with this name, year group and division already exists. Edit that class instead.');
@@ -143,6 +152,9 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     await transaction(async (tx) => {
       const current = await snapshot(tx);
       const incoming = preview.classes.map((c) => ({ ...c, id: current.classes.find((old) => classKey(old) === classKey(c))?.id ?? c.id }));
+      if (current.meetings?.some((meeting) => meeting.state !== 'cancelled'
+        && current.lessons.some((l) => l.id === meeting.lessonId && incoming.some((c) => c.id === l.classId))))
+        throw new HttpError(409, 'Cancel live meetings for the imported classes before replacing their rosters.');
       const classes = [...current.classes.filter((c) => !incoming.some((n) => n.id === c.id)), ...incoming];
       for (const lesson of current.lessons) checkSchedule(lesson, current.lessons, classes, current.slots, lesson.id);
       for (const classroom of incoming) await save(tx, 'class', classroom.id, classroom);
@@ -202,8 +214,16 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
         editable(req.user!, data, previous.classId);
         if (previous.classId !== input.classId) throw new HttpError(400, 'A lesson cannot be moved to a different class.');
       }
-      checkSchedule(input, data.lessons, data.classes, data.slots, lessonId);
-      const result: Lesson = { ...input, id: lessonId, files: previous?.files ?? [], updatedAt: new Date().toISOString() };
+      if (data.meetings?.some((meeting) => meeting.lessonId === lessonId && meeting.state !== 'cancelled'))
+        throw new HttpError(409, "Cancel this lesson's live meetings before editing it. Meeting invitations must not become out of sync.");
+      if (!input.schedule) throw new HttpError(400, 'Choose a date and recurrence for this lesson.');
+      let preview;
+      try { preview = previewSchedule(data.calendar ?? EMPTY_CALENDAR, data.slots, input.slotIds, input.schedule); }
+      catch (error) { if (error instanceof Error) throw new HttpError(400, error.message); throw error; }
+      const occurrences = preview.occurrences.map((item) => ({ ...item, id: previous?.occurrences?.find((old) => old.date === item.date && old.slotId === item.slotId
+        && !data.meetings?.some((meeting) => meeting.occurrenceId === old.id && meeting.state === 'cancelled'))?.id ?? randomUUID() }));
+      const result: Lesson = { ...input, occurrences, id: lessonId, files: previous?.files ?? [], updatedAt: new Date().toISOString() };
+      checkSchedule(result, data.lessons, data.classes, data.slots, lessonId);
       await save(tx, 'lesson', lessonId, result);
       return result;
     });
@@ -218,6 +238,8 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
       const data = await snapshot(tx);
       const lesson = lessonById(data, lessonId);
       editable(req.user!, data, lesson.classId);
+      if (data.meetings?.some((meeting) => meeting.lessonId === lessonId && meeting.state !== 'cancelled'))
+        throw new HttpError(409, "Cancel this lesson's live meetings before deleting it.");
       await remove(tx, 'lesson', lessonId);
       return lesson.files;
     });

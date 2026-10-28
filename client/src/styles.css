@@ -145,6 +145,12 @@ table { border-collapse: collapse; width: 100%; font-size: .83rem; text-align: l
 th { font-size: .7rem; color: var(--text-muted); letter-spacing: .03em; font-weight: 550; padding: 14px 12px; border-bottom: 1px solid var(--border); }
 td { padding: 14px 12px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .structure-row { display: grid; grid-template-columns: 2fr 1.2fr 1fr 1fr 44px; gap: 14px; align-items: end; margin-bottom: 18px; }
+.calendar-range { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 18px; }
+.calendar-range label { flex: 1 1 150px; margin-bottom: 0; max-width: 100%; }
+.calendar-range input, .calendar-range select { min-width: 0; max-width: 100%; }
+.segmented { max-width: 100%; flex-wrap: wrap; }
+.date-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+.date-navigation label { margin-bottom: 0; }
 .structure-row label { margin-bottom: 0; }
 .structure-row input, .structure-row select { min-width: 0; max-width: 100%; }
 .class-details { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }

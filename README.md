@@ -33,17 +33,100 @@ use a **private Azure Blob Storage container**.
   Learning redirects unauthenticated visitors there and restores the requested Learning
   page after successful sign-in. An existing Portal session skips the login form.
   Independent Learning cookies never share Portal session tokens.
-- Students land on their weekly timetable, including breaks, lesson descriptions,
+- Students land on their dated timetable, including breaks, lesson descriptions,
   downloadable files, external resources and Microsoft Teams links.
 - Parents select an attached child in the left-hand list to see that child's timetable
   on the right. Small screens stack the child selector above the timetable.
 - Assigned teachers manage lessons and view their class rosters. A lesson can occupy
-  one or more weekly periods on the same or different days.
+  one or more periods on a teaching date, once, daily or weekly within a term.
 - **Learn Admin** and **Full Admin** can import classes, maintain weekly day structures,
   and manage all learning classes and lessons. Unassigned staff can sign in but cannot
   manage someone else's class.
 - Central Full Admins continue to administer users, activation, roles and parent links
   in Applications Portal. Learning does not create another user database or role editor.
+
+## Academic calendar and dated lessons
+
+1. In **Administration > Academic calendar**, add an academic year, its terms and
+   holiday/closure ranges. Start/end dates are inclusive; equal dates represent
+   a single day. Academic years and terms cannot overlap; terms and holidays must
+   fit inside their academic year. Teaching dates are Monday-Friday inside a term,
+   excluding holidays. Inter-term dates and weekends remain visible as non-teaching
+   dates. Dates are derived from ranges, not manually entered one by one.
+2. Keep **Day structure** as the weekday period template. Daily recurrence matches
+   the selected periods by start/end time and period type in each weekday template.
+   Missing matching periods produce an error rather than silently dropping lessons.
+3. Teachers choose an actual start date, one or more periods on that day, and
+   **One-off**, **Daily** (1-366 calendar days) or **Weekly** (1-53 weeks).
+   Skipped weekends/holidays count toward the requested duration, without extending
+   the series. A maximum of 500 period occurrences is allowed per lesson.
+4. Preview shows skipped dates, term end and the actual final teaching date. A
+   series never crosses its starting term's end; teachers explicitly confirm
+   truncation before saving. Students/parents can browse actual dates and weeks,
+   and only see lessons scheduled for the selected date.
+
+Schema version 2 adds calendar, occurrence and live-meeting tables without deleting
+existing data. Legacy weekly lessons remain readable before a calendar is configured;
+afterwards they must be converted to dated schedules to appear in the dated timetable.
+For the requested **fresh development schedules**, temporarily set
+`ALLOW_SCHEDULE_RESET=true` on the **development Learning web app only**, then use
+the admin calendar's reset action and type `CLEAR DEVELOPMENT LESSONS`. It deletes
+lessons/resources, but retains classes, rosters, period templates and the calendar.
+Cancel live meetings first. Turn the setting off afterwards. Deployment never
+automatically clears a database; do not enable this action on production.
+
+Calendar edits that would change existing occurrences are rejected. Reschedule or
+remove affected lessons first. Period templates used by any occurrence are locked.
+Date-aware conflict checks protect shared classes, teachers and students.
+
+## Teacher-owned Teams meetings
+
+On the existing Entra app registration, add **delegated** `User.Read` and
+`Calendars.ReadWrite`, grant tenant admin consent and configure a **Web** redirect:
+`<Learning PUBLIC_BASE_URL>/api/teams/callback`. The flow also requests `openid`,
+`profile` and `offline_access`; application calendar permissions are not used.
+The development callback is:
+`https://jess-learn-dev-ctdqcjhkb7c3f9cp.westus3-01.azurewebsites.net/api/teams/callback`.
+For Vite development use `http://localhost:5174/api/teams/callback`.
+
+Set these **Learning web app** settings. Reuse the existing Entra app registration
+and credentials; no new registration or separate Teams client secret is needed.
+App Service settings are per web app, so credentials present on Applications Portal
+must also be configured on Learning (or use shared Key Vault references).
+Leave `TEAMS_TOKEN_KEY` unset to disable Teams, even when Entra credentials exist.
+
+| Setting | Value |
+| --- | --- |
+| `ENTRA_TENANT_ID` | Existing school Entra tenant UUID |
+| `ENTRA_CLIENT_ID` | Existing application/client UUID |
+| `ENTRA_CLIENT_SECRET` | Existing valid secret for that app registration; keep server-side |
+| `TEAMS_TOKEN_KEY` | Base64-encoded random 32-byte encryption key; keep stable and secret |
+
+Teachers need an Exchange Online mailbox, a Teams licence and a policy permitting
+meeting scheduling. After saving a dated lesson, an assigned Staff teacher chooses
+**Connect my Microsoft calendar**, then **Create / retry live meetings**. The account
+must be a tenant Member whose Microsoft sign-in name (UPN) matches the central
+teacher's email in the configured school tenant. Matching only the `mail` attribute
+is not sufficient; UPN/email aliases that differ need identity mapping before use.
+Tokens are encrypted in SQL, never returned to the browser. OAuth uses PKCE and an
+expiring state cookie bound to the teacher session.
+
+Each period occurrence creates its own Teams-enabled calendar event (not an Outlook
+recurrence series), with the teacher as organiser and the class's server-side roster
+as required attendees. Microsoft sends real invitations; test with test accounts.
+Invitations support up to 500 unique students after removing duplicates and the
+teacher's own address; larger rosters must be split before meeting creation.
+Students get a **Join live lesson** link only on the matching occurrence date.
+Portal lessons/resources remain usable when Teams is unconfigured.
+
+Meeting creation records durable pending state and uses the occurrence ID as Graph
+`transactionId`. Ambiguous network failures remain visible; retry the same occurrence
+to resolve them before cancellation. Completed meetings are not recreated on retry.
+Creation is teacher-triggered; no background poller keeps serverless SQL awake.
+Cancel live meetings before editing/deleting their lesson or changing its roster.
+Only the original organiser can cancel. Calendar changes never silently reschedule
+Microsoft invitations. School Teams policies still govern lobby, presenters,
+recording and student participation; the app does not override those policies.
 
 ## Setup
 
@@ -74,11 +157,11 @@ use a **private Azure Blob Storage container**.
      copied from Storage account > Access keys. Set a private `AZURE_STORAGE_CONTAINER`
      (default `learning-files`). **No storage managed identity, account-URL authentication
      or local-disk fallback is used, including in development.**
-4. Configure Entra and the Microsoft 365 mail sender **only on Applications Portal**.
-   Learning does not use MSAL, accept ID tokens/passwords/OTP codes, or need an Entra
-   redirect URI. Remove any Learning-specific SPA redirect URI left from the previous
-   direct-sign-in setup if no other application needs it. Allowed domains and token
-   validation remain central. Portal URLs must be origins without paths or credentials.
+4. Configure sign-in and the Microsoft 365 mail sender on Applications Portal.
+   Learning sign-in remains central and does not accept passwords/OTP codes.
+   The optional Teams feature separately authorises a teacher's calendar, requiring
+   a Learning **Web** callback URI as described below, not a SPA redirect URI.
+   Portal URLs must be origins without paths or credentials.
 5. Install and start:
 
    ```powershell

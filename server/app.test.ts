@@ -6,28 +6,35 @@ import sharp from 'sharp';
 vi.mock('./config.js', () => ({ config: {
   APPLICATIONS_PORTAL_URL: 'http://localhost:8080', PUBLIC_BASE_URL: 'http://localhost:5174',
   SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: false, SQL_SERVERLESS_ENABLED: false,
+  ALLOW_SCHEDULE_RESET: false,
 } }));
 vi.mock('./platform.js', () => ({
   platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(), platformImage: vi.fn(), navigationFor: vi.fn(),
   parsePlatform: (schema: { parse: (data: unknown) => unknown }, data: unknown) => schema.parse(data),
 }));
-vi.mock('./repository.js', () => ({ snapshot: vi.fn(), save: vi.fn(), remove: vi.fn(), saveStructure: vi.fn() }));
+vi.mock('./repository.js', () => ({ snapshot: vi.fn(), save: vi.fn(), remove: vi.fn(), saveStructure: vi.fn(), saveCalendar: vi.fn() }));
 vi.mock('./db.js', () => ({ transaction: vi.fn(async (work: (tx: object) => Promise<unknown>) => work({})), pool: vi.fn() }));
 vi.mock('./storage.js', () => ({ putFile: vi.fn(), readFileContent: vi.fn(), deleteFile: vi.fn(), checkStorage: vi.fn() }));
 
 import { createApp } from './app.js';
 import { platform, getUser, findUsers, platformImage, navigationFor, publicConfig } from './platform.js';
 import { pool } from './db.js';
-import { snapshot, save, saveStructure, remove } from './repository.js';
+import { snapshot, save, saveStructure, remove, saveCalendar } from './repository.js';
 import { readFileContent, putFile, checkStorage } from './storage.js';
 import { HttpError } from './errors.js';
 import { config } from './config.js';
 import { CSV_HEADERS } from './importClasses.js';
+import { academicCalendarSchema } from '../shared/calendar.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
 const user = (id: number, roles: string[], studentEmails: string[] = []): User => ({ ...person(id), roles, studentEmails, isActive: true, sessionVersion: 0 });
 const seed: Snapshot = {
+  calendar: {
+    years: [{ id: uuid(70), name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
+    terms: [{ id: uuid(71), yearId: uuid(70), name: 'Term 1', start: '2026-09-01', end: '2026-12-11' }],
+    holidays: [],
+  },
   periodTypes: DEFAULT_PERIOD_TYPES,
   classes: [
     { id: uuid(1), name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [person(10)], students: [person(20), person(21)] },
@@ -51,9 +58,10 @@ async function call(path: string, method = 'GET', body?: unknown, authenticated 
     ...(!form && body !== undefined ? { 'Content-Type': 'application/json' } : {}),
   }, ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }) });
 }
-const draft = { classId: uuid(1), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)] };
+const draft = { classId: uuid(1), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)], schedule: { startDate: '2026-10-27', frequency: 'once', count: 1 } };
 beforeEach(async () => {
   config.SQL_SERVERLESS_ENABLED = false;
+  config.ALLOW_SCHEDULE_RESET = false;
   await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not start');
@@ -72,6 +80,7 @@ beforeEach(async () => {
     if (kind === 'lesson') state.lessons = [...state.lessons.filter((l) => l.id !== id), lessonSchema.parse(value)];
   });
   vi.mocked(saveStructure).mockImplementation(async (_tx, structure) => { Object.assign(state, structure); });
+  vi.mocked(saveCalendar).mockImplementation(async (_tx, calendar) => { state.calendar = academicCalendarSchema.parse(calendar); });
   vi.mocked(remove).mockImplementation(async (_tx, kind, id) => {
     if (kind === 'class') state.classes = state.classes.filter((c) => c.id !== id);
     if (kind === 'lesson') state.lessons = state.lessons.filter((l) => l.id !== id);
@@ -295,13 +304,47 @@ describe('authenticated learning API', () => {
     current.studentEmails = [];
     expect((await (await call('/learning')).json()).lessons).toEqual([]);
   });
-  it('creates one lesson across different days, preserving its resources on later edits', async () => {
+  it('creates dated lessons, preserving resources when converting a legacy lesson', async () => {
     const response = await call('/lessons', 'POST', { ...draft, slotIds: [uuid(4)] });
     expect(response.status).toBe(200);
     expect((await response.json()).slotIds).toEqual([uuid(4)]);
-    const edit = await call(`/lessons/${uuid(6)}`, 'PUT', { ...draft, slotIds: [uuid(3)] });
+    const edit = await call(`/lessons/${uuid(6)}`, 'PUT', { ...draft, slotIds: [uuid(3)], schedule: { ...draft.schedule, startDate: '2026-10-26' } });
     expect(edit.status).toBe(200);
     expect((await edit.json()).files).toEqual(seed.lessons[0].files);
+  });
+  it('previews term-limited repeats with actual dates and no writes', async () => {
+    const response = await call('/lessons/preview', 'POST', { ...draft, schedule: { startDate: '2026-12-08', frequency: 'weekly', count: 5 } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ actualEnd: '2026-12-08', termEnd: '2026-12-11', truncated: true });
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('protects the calendar and blocks edits that would silently change dated lessons', async () => {
+    expect((await call('/admin/calendar', 'PUT', seed.calendar)).status).toBe(403);
+    await call('/lessons', 'POST', draft);
+    current = user(10, ['Learn Admin']);
+    expect((await call('/admin/calendar', 'PUT', seed.calendar)).status).toBe(200);
+    const calendar = { ...seed.calendar, holidays: [{ id: uuid(72), yearId: uuid(70), name: 'Closure', start: '2026-10-27', end: '2026-10-27' }] };
+    expect((await call('/admin/calendar', 'PUT', calendar)).status).toBe(409);
+  });
+  it('requires explicit development configuration and confirmation for clearing lessons', async () => {
+    current = user(10, ['Learn Admin']);
+    expect((await call('/admin/schedules/reset', 'POST', { confirmation: 'CLEAR DEVELOPMENT LESSONS' })).status).toBe(403);
+    config.ALLOW_SCHEDULE_RESET = true;
+    expect((await call('/admin/schedules/reset', 'POST', { confirmation: 'yes' })).status).toBe(400);
+    expect(state.lessons).toHaveLength(1);
+    expect((await call('/admin/schedules/reset', 'POST', { confirmation: 'CLEAR DEVELOPMENT LESSONS' })).status).toBe(200);
+    expect(state.lessons).toHaveLength(0);
+    expect(state.classes).toHaveLength(2);
+    expect(state.slots).toEqual(seed.slots);
+  });
+  it('requires cancelling live meetings before deleting lessons or changing class rosters', async () => {
+    state.meetings = [{ occurrenceId: uuid(90), lessonId: uuid(6), organizerUserId: 10, state: 'pending', joinUrl: null }];
+    expect((await call(`/lessons/${uuid(6)}`, 'DELETE')).status).toBe(409);
+    expect((await call(`/lessons/${uuid(6)}`, 'PUT', draft)).status).toBe(409);
+    current = user(10, ['Learn Admin']);
+    expect((await call(`/admin/classes/${uuid(1)}`, 'PUT', {
+      name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [person(10)], students: [{ email: 'new@school.test', displayName: 'New' }],
+    })).status).toBe(409);
   });
   it('blocks teachers from managing other classes, and students from creating lessons', async () => {
     expect((await call('/lessons', 'POST', { ...draft, classId: uuid(2) })).status).toBe(403);
@@ -315,8 +358,8 @@ describe('authenticated learning API', () => {
     expect(save).not.toHaveBeenCalled();
   });
   it('rejects breaks, timetable clashes and duplicate slot IDs', async () => {
-    expect((await call('/lessons', 'POST', { ...draft, slotIds: [uuid(5)] })).status).toBe(409);
-    expect((await call('/lessons', 'POST', { ...draft, slotIds: [uuid(3)] })).status).toBe(409);
+    expect((await call('/lessons', 'POST', { ...draft, slotIds: [uuid(5)] })).status).toBe(400);
+    expect((await call('/lessons', 'POST', { ...draft, slotIds: [uuid(3)], schedule: { ...draft.schedule, startDate: '2026-10-26' } })).status).toBe(409);
     expect((await call('/lessons', 'POST', { ...draft, slotIds: [uuid(4), uuid(4)] })).status).toBe(400);
     expect(save).not.toHaveBeenCalled();
   });
