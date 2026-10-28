@@ -50,6 +50,15 @@ describe('dated timetable', () => {
     expect(html).toContain('2026-10-26');
     expect(html).toContain('current-period');
   });
+  it('puts each day and date together in a bold heading above the counts', () => {
+    const html = dated('2026-10-28');
+    expect(html).toContain('<h2>Wednesday 28/10/2026</h2>');
+    expect(html).not.toContain('Wednesday 2026-10-28');
+    expect(html).toContain('<strong class="day-tab-heading">Wed - 28/10</strong><small>0 periods</small>');
+    expect(html).toContain('<strong class="day-tab-heading">Mon - 26/10</strong>');
+    expect(html).toContain('<strong class="day-tab-heading">Sun - 01/11</strong>');
+    expect(html).not.toContain('<small>28/10</small>');
+  });
   it('does not repeat a one-off lesson on the same weekday next week', () => {
     const html = dated('2026-11-02');
     expect(html).not.toContain('Fractions');

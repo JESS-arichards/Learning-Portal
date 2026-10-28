@@ -1,6 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
+it('keeps the whole day scrollable with room to align the final current period at the top', () => {
+  const css = readFileSync(new URL('../client/src/styles.css', import.meta.url), 'utf8');
+  expect(css).toContain('.timeline { max-height: 65vh; overflow-y: auto; overscroll-behavior-y: contain; padding: 8px; position: relative; }');
+  expect(css).toContain('.timeline:has(.current-period)::after { content: ""; display: block; height: calc(65vh - 38px); }');
+});
+
+it('aligns timetable navigation buttons with the date input rather than its label', () => {
+  const css = readFileSync(new URL('../client/src/styles.css', import.meta.url), 'utf8');
+  expect(css).toContain('.date-navigation { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 18px; }');
+  expect(css).toContain('.date-navigation > .btn, .date-navigation input { height: 44px; }');
+});
+
 it('keeps period actions separate from bounded fields on narrow screens', () => {
   const css = readFileSync(new URL('../client/src/styles.css', import.meta.url), 'utf8');
   expect(css).toContain('.structure-row input, .structure-row select { min-width: 0; max-width: 100%; }');

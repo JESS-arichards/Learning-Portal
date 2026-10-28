@@ -2,10 +2,11 @@ import { Children, isValidElement, type ReactNode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_PERIOD_TYPES, type Snapshot, type User } from '../../shared/learning';
 
-const hooks = vi.hoisted(() => ({ values: [] as unknown[], index: 0, effect: vi.fn() }));
+const hooks = vi.hoisted(() => ({ values: [] as unknown[], index: 0, effect: vi.fn(), ref: { current: null as unknown } }));
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useEffect: hooks.effect,
+  useRef: () => hooks.ref,
   useState: (initial: unknown) => {
     const index = hooks.index++;
     if (!(index in hooks.values)) hooks.values[index] = typeof initial === 'function' ? initial() : initial;
@@ -42,6 +43,7 @@ afterEach(() => {
   vi.useRealTimers();
   hooks.values = [];
   hooks.effect.mockClear();
+  hooks.ref.current = null;
 });
 
 it('updates the current period without reloading and cleans up its timer', () => {
@@ -67,4 +69,46 @@ it('updates the current period without reloading and cleans up its timer', () =>
   expect(find(render(), current)).toBeNull();
   cleanup();
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('scrolls only the day region to the current period and preserves the whole day', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-26T05:30:00Z'));
+  const tree = render();
+  const region = find(tree, (props) => props['aria-label'] === 'Day timetable periods');
+  expect(region?.role).toBe('region');
+  expect(region?.tabIndex).toBe(0);
+  expect(find(tree, (props) => props.children === '08:00')).not.toBeNull();
+  expect(find(tree, (props) => props.children === '09:00')).not.toBeNull();
+  const container = {
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 100 }),
+    querySelector: vi.fn(() => ({ getBoundingClientRect: () => ({ top: 350 }) })),
+  };
+  hooks.ref.current = container;
+  const scrollEffect = hooks.effect.mock.calls[1];
+  scrollEffect[0]();
+  expect(container.scrollTop).toBe(242);
+  container.scrollTop = 42;
+  hooks.effect.mockClear();
+  const cleanup = (() => {
+    render();
+    return hooks.effect.mock.calls[0][0]();
+  })();
+  vi.advanceTimersByTime(1000);
+  hooks.effect.mockClear();
+  render();
+  expect(hooks.effect.mock.calls[1][1]).toEqual(scrollEffect[1]);
+  expect(container.scrollTop).toBe(42);
+  cleanup();
+});
+
+it('starts at the top when the selected day has no current period', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-26T03:00:00Z'));
+  render();
+  const container = { scrollTop: 200, querySelector: () => null };
+  hooks.ref.current = container;
+  hooks.effect.mock.calls[1][0]();
+  expect(container.scrollTop).toBe(0);
 });

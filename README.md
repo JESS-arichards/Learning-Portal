@@ -9,6 +9,18 @@ Day tabs count teaching periods separately from slots whose configured period ty
 is named "Registration" (case-insensitive), for example "6 periods" plus
 "1 registration". Registration remains schedulable; scheduled lesson totals are
 unchanged.
+Dated day tabs display a single bold heading such as "Wed - 28/10", with period
+and registration counts underneath. On narrow screens the tab strip scrolls.
+Date-navigation buttons and the date input share a 44px height and align along
+their bottom edges, with the input label above.
+The day timeline is keyboard-focusable and scrolls independently within 65% of
+the viewport height. On opening a day or entering a new period it positions the
+current period at the top, retaining all earlier/later periods for manual scrolling.
+It does not snap back on routine clock updates. End spacing lets even the final
+period align at the top without clipping its orange outline.
+Scrolling within the periods region does not chain into scrolling the page at its
+edges; the headings and controls move only when the page itself is scrolled.
+The selected-day heading uses UK dates, for example "Wednesday 28/10/2026".
 
 On screens up to 600px wide, the shared navigation title wraps rather than
 truncating. The logo is capped at 80px wide and information/menu controls retain
