@@ -24,10 +24,5 @@ describe('canonical Learning schema', () => {
     expect(connect).toHaveBeenCalledOnce();
     expect(batch).toHaveBeenNthCalledWith(1, script);
     expect(batch).toHaveBeenNthCalledWith(2, script);
-    expect(script).toContain("IF OBJECT_ID(N'dbo.LearningDocuments', N'U') IS NULL");
-    expect(script).toContain('WITH CHECK CHECK CONSTRAINT');
-    expect(script).toContain("THROW 51001");
-    expect(script).toContain('ROLLBACK TRANSACTION');
-    expect(script).toContain("@Resource = N'learning-write'");
   });
 });

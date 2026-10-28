@@ -1,0 +1,186 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type sql from 'mssql';
+
+vi.mock('./db.js', async () => ({ sql: (await import('mssql')).default, transaction: vi.fn() }));
+import { snapshot, save, saveStructure, remove } from './repository.js';
+import { DEFAULT_PERIOD_TYPES, type LearningClass, type Lesson } from '../shared/learning.js';
+
+// Explicit opt-in; this suite creates its own LocalDB instance and never uses application credentials.
+const enabled = process.env.LEARNING_LOCALDB_TESTS === '1' && process.platform === 'win32';
+describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', () => {
+  const instance = `LearningTests_${process.pid}`;
+  const database = 'LearningMigrationTests';
+  let directory: string;
+  let created = false;
+  let sequence = 0;
+  const schema = readFileSync(new URL('../database/schema.sql', import.meta.url), 'utf8');
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const quote = (value: string) => `N'${value.replaceAll("'", "''")}'`;
+  function run(text: string, db = database): string {
+    const file = join(directory, `${sequence++}.sql`);
+    writeFileSync(file, `SET NOCOUNT ON; SET QUOTED_IDENTIFIER ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET ARITHABORT ON; SET CONCAT_NULL_YIELDS_NULL ON; SET NUMERIC_ROUNDABORT OFF;\n${text}`);
+    const result = spawnSync('sqlcmd', ['-S', `(localdb)\\${instance}`, '-E', '-b', '-y', '0', '-w', '65535', '-d', db, '-i', file],
+      { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`Local SQL batch failed:\n${result.stdout}\n${result.stderr}`);
+    return result.stdout.trim();
+  }
+  function reset() {
+    run(`IF DB_ID('${database}') IS NOT NULL BEGIN ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]; END;
+      CREATE DATABASE [${database}] ON PRIMARY (NAME=N'LearningData',FILENAME=${quote(join(directory, 'learning.mdf'))})
+      LOG ON (NAME=N'LearningLog',FILENAME=${quote(join(directory, 'learning_log.ldf'))});`, 'master');
+  }
+  const classroom: LearningClass = {
+    id: uuid(1), name: "Year 7 Teacher's Maths", yearGroup: '7', division: 'Secondary',
+    teachers: [{ id: 12, email: 'teacher@school.test', displayName: 'Teacher' }],
+    students: [{ email: 'pending@school.test', displayName: 'Pending Student' }],
+  };
+  const slot = { id: uuid(2), name: 'P1', day: 0, typeId: 'lesson', kind: 'lesson' as const, start: '08:00', end: '09:00' };
+  const lesson: Lesson = {
+    id: uuid(3), classId: classroom.id, name: 'Fractions', description: 'Long description '.repeat(400).trim(),
+    slotIds: [slot.id], updatedAt: '2026-10-27T00:00:00.000Z',
+    links: [{ id: uuid(4), kind: 'link', name: 'Website', url: 'https://school.test/' }],
+    files: [{ id: uuid(5), kind: 'file', name: 'Original.pdf', size: 123 }],
+  };
+  function legacy(structure: unknown = { slots: [slot], periodTypes: DEFAULT_PERIOD_TYPES }, badLesson: unknown = lesson, roster: unknown = classroom) {
+    run(`CREATE TABLE dbo.LearningDocuments(Kind varchar(16) NOT NULL,Id uniqueidentifier NOT NULL,Body nvarchar(max) NOT NULL,PRIMARY KEY(Kind,Id));
+      INSERT dbo.LearningDocuments VALUES
+      ('class','${classroom.id}',${quote(JSON.stringify(roster))}),
+      ('structure','00000000-0000-4000-8000-000000000001',${quote(JSON.stringify(structure))}),
+      ('lesson','${lesson.id}',${quote(JSON.stringify(badLesson))});`);
+  }
+  function transaction(): sql.Transaction {
+    const inputs = new Map<string, unknown>();
+    const request = {
+      input(name: string, _type: unknown, value: unknown) { inputs.set(name, value); return request; },
+      async query(query: string) {
+        const parameters = [...inputs].map(([name, value]) => `DECLARE @${name} nvarchar(max)=${quote(String(value))};`).join('\n');
+        run(`SET XACT_ABORT ON; BEGIN TRANSACTION;\n${parameters}\n${query}\nCOMMIT;`);
+        return {};
+      },
+    };
+    return { request: () => request } as unknown as sql.Transaction;
+  }
+  async function readSnapshot() {
+    const connection = { request: () => ({
+      async query(query: string) {
+        const selects = query.split(';').map((part) => part.trim()).filter(Boolean);
+        const text = selects.map((select) => `SET @result += (${select} FOR JSON PATH) + N',';`).join('\n');
+        const json = run(`DECLARE @result nvarchar(max)=N'['; ${text}
+          SET @result=LEFT(@result,LEN(@result)-1)+N']'; SELECT @result;`);
+        return { recordsets: JSON.parse(json) };
+      },
+    }) } as unknown as sql.Transaction;
+    return snapshot(connection);
+  }
+  beforeAll(() => {
+    directory = mkdtempSync(join(tmpdir(), 'learning-relational-'));
+    execFileSync('SqlLocalDB', ['create', instance], { stdio: 'pipe' }); created = true;
+    execFileSync('SqlLocalDB', ['start', instance], { stdio: 'pipe' });
+    reset();
+  }, 60000);
+  afterAll(() => {
+    if (created) {
+      execFileSync('SqlLocalDB', ['stop', instance, '-k'], { stdio: 'pipe' });
+      execFileSync('SqlLocalDB', ['delete', instance], { stdio: 'pipe' });
+    }
+    if (directory) rmSync(directory, { recursive: true, force: true });
+  });
+  it('creates a fresh schema, seeds types and reruns without creating the document archive', () => {
+    reset(); run(schema); run(schema);
+    expect(run("SELECT COUNT(*) FROM dbo.LearningPeriodTypes;")).toBe('2');
+    expect(run("SELECT COUNT(*) FROM sys.tables WHERE name='LearningDocuments';")).toBe('0');
+  });
+  it.each(['object', 'array'])('migrates a legacy %s structure without losing IDs, content or archive data', (shape) => {
+    reset(); legacy(shape === 'array' ? [slot] : undefined); run(schema);
+    expect(run('SELECT Description FROM dbo.LearningLessons;')).toBe(lesson.description.trim());
+    expect(run('SELECT Email FROM dbo.LearningClassStudents;')).toBe(classroom.students[0].email);
+    expect(run('SELECT CONVERT(varchar(36),Id) FROM dbo.LearningLessonFiles;')).toBe(lesson.files[0].id);
+    expect(run('SELECT CONVERT(varchar(36),PeriodId) FROM dbo.LearningLessonPeriods;')).toBe(slot.id);
+    expect(run("SELECT Body FROM dbo.LearningDocuments WHERE Kind='lesson';")).toBe(JSON.stringify(lesson));
+    run("UPDATE dbo.LearningClasses SET Name='Changed after migration';"); run(schema);
+    expect(run('SELECT Name FROM dbo.LearningClasses;')).toBe('Changed after migration');
+  });
+  it('rolls back invalid legacy references and allows correction before retry', () => {
+    reset(); legacy(undefined, { ...lesson, classId: uuid(99) });
+    expect(() => run(schema)).toThrow();
+    expect(run("SELECT COUNT(*) FROM sys.tables WHERE name='LearningClasses';")).toBe('0');
+    expect(run('SELECT COUNT(*) FROM dbo.LearningDocuments;')).toBe('3');
+    run(`UPDATE dbo.LearningDocuments SET Body=${quote(JSON.stringify(lesson))} WHERE Kind='lesson';`);
+    run(schema);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessons;')).toBe('1');
+  });
+  it('preserves custom types, multi-day assignments and complete ordered rosters/resources', () => {
+    reset();
+    const type = { id: uuid(10), name: 'Registration', kind: 'lesson' as const };
+    const nextSlot = { ...slot, id: uuid(11), day: 2, typeId: type.id };
+    const roster = { ...classroom,
+      teachers: [...classroom.teachers, { id: 13, email: 'second@school.test', displayName: 'Second Teacher' }],
+      students: [...classroom.students, { id: 999, email: 'second-student@school.test', displayName: 'Second Student' }],
+    };
+    const content = { ...lesson, slotIds: [nextSlot.id, slot.id],
+      links: [...lesson.links, { id: uuid(12), kind: 'teams', name: 'Meeting', url: 'https://teams.microsoft.com/l/meetup-join/test' }],
+      files: [...lesson.files, { id: uuid(13), kind: 'file', name: 'Empty.txt', size: 0 }],
+    };
+    legacy({ slots: [slot, nextSlot], periodTypes: [...DEFAULT_PERIOD_TYPES, type] }, content, roster);
+    run(schema); run(schema);
+    expect(run('SELECT Name FROM dbo.LearningPeriodTypes ORDER BY Position;').split(/\r?\n/).map((s) => s.trim())).toEqual(['Lesson', 'Break', 'Registration']);
+    expect(run('SELECT CONVERT(varchar(36),PeriodId) FROM dbo.LearningLessonPeriods ORDER BY Position;').split(/\r?\n/).map((s) => s.trim())).toEqual(content.slotIds);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningClassTeachers;')).toBe('2');
+    expect(run('SELECT Email FROM dbo.LearningClassStudents ORDER BY Position;').split(/\r?\n/).map((s) => s.trim())).toEqual(roster.students.map((s) => s.email));
+    expect(run('SELECT Kind FROM dbo.LearningLessonLinks ORDER BY Position;').split(/\r?\n/).map((s) => s.trim())).toEqual(['link', 'teams']);
+    expect(run('SELECT Name FROM dbo.LearningLessonFiles ORDER BY Position;').split(/\r?\n/).map((s) => s.trim())).toEqual(['Original.pdf', 'Empty.txt']);
+  });
+  it.each([
+    ['duplicate assigned periods', { ...lesson, slotIds: [slot.id, slot.id] }],
+    ['missing assigned period', { ...lesson, slotIds: [uuid(99)] }],
+    ['empty assigned periods', { ...lesson, slotIds: [] }],
+    ['malformed updated time', { ...lesson, updatedAt: 'not a date' }],
+    ['mismatched document ID', { ...lesson, id: uuid(99) }],
+    ['oversized lesson name', { ...lesson, name: 'x'.repeat(201) }],
+    ['oversized description', { ...lesson, description: 'x'.repeat(10001) }],
+    ['negative file size', { ...lesson, files: [{ ...lesson.files[0], size: -1 }] }],
+    ['duplicate file IDs', { ...lesson, files: [lesson.files[0], lesson.files[0]] }],
+    ['invalid resource kind', { ...lesson, links: [{ ...lesson.links[0], kind: 'invalid' }] }],
+  ])('rejects %s without partially migrating any records', (_name, content) => {
+    reset(); legacy(undefined, content);
+    expect(() => run(schema)).toThrow();
+    expect(run("SELECT COUNT(*) FROM sys.tables WHERE name='LearningClasses';")).toBe('0');
+    expect(run('SELECT COUNT(*) FROM dbo.LearningDocuments;')).toBe('3');
+  });
+  it('refuses to merge populated relational data when the migration marker is missing', async () => {
+    reset(); run(schema);
+    await save(transaction(), 'class', classroom.id, classroom);
+    run('DELETE FROM dbo.LearningSchemaMigrations;');
+    expect(() => run(schema)).toThrow();
+    expect(run('SELECT Name FROM dbo.LearningClasses;')).toBe(classroom.name);
+  });
+  it('executes repository writes and enforces referenced class/period protection', async () => {
+    reset(); run(schema);
+    await save(transaction(), 'class', classroom.id, classroom);
+    await saveStructure(transaction(), { slots: [slot], periodTypes: DEFAULT_PERIOD_TYPES });
+    await save(transaction(), 'lesson', lesson.id, lesson);
+    const data = await readSnapshot();
+    expect(data.classes).toEqual([classroom]);
+    expect(data.slots).toEqual([slot]);
+    expect(data.lessons[0]).toEqual({ ...lesson, updatedAt: data.lessons[0].updatedAt });
+    expect(Date.parse(data.lessons[0].updatedAt)).toBe(Date.parse(lesson.updatedAt));
+    expect(run('SELECT Description FROM dbo.LearningLessons;')).toBe(lesson.description.trim());
+    await save(transaction(), 'class', classroom.id, { ...classroom, name: 'Renamed' });
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessons;')).toBe('1');
+    await expect(remove(transaction(), 'class', classroom.id)).rejects.toThrow();
+    await expect(saveStructure(transaction(), { slots: [], periodTypes: DEFAULT_PERIOD_TYPES })).rejects.toThrow();
+    expect(run('SELECT COUNT(*) FROM dbo.LearningPeriods;')).toBe('1');
+    await save(transaction(), 'lesson', lesson.id, { ...lesson, name: 'Edited', files: [] });
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessonFiles;')).toBe('0');
+    await remove(transaction(), 'lesson', lesson.id);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessonLinks;')).toBe('0');
+    await saveStructure(transaction(), { slots: [], periodTypes: DEFAULT_PERIOD_TYPES });
+    await remove(transaction(), 'class', classroom.id);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningClassStudents;')).toBe('0');
+  });
+});

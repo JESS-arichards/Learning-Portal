@@ -37,10 +37,10 @@ use a **private Azure Blob Storage container**.
 2. Create a separate learning database. Do **not** point this app at the Portal database.
    Run [database/schema.sql](database/schema.sql) in that database with a schema-owner
    SQL login, or allow the app to create/update the schema at startup. The same script
-   is used by startup and copied into the production build. It creates
-   `dbo.LearningDocuments`, repairs missing constraints on earlier versions, re-enables
-   disabled/untrusted constraints and preserves rows. Incompatible columns, keys or
-   invalid existing data fail explicitly and roll back; there is no destructive rebuild.
+   is used by startup and copied into the production build. It creates relational
+   tables for classes, rosters, lessons, resources and day structures, and migrates
+   existing document-based data transactionally. Invalid legacy data fails explicitly
+   and rolls back; there is no destructive rebuild. See the migration precautions below.
    Initialization and learning writes share an application lock across app instances.
 3. Copy `.env.example` to `.env` and set:
    - `PUBLIC_BASE_URL`: this application's URL.
@@ -134,19 +134,35 @@ strings are rejected. Do not set `AZURE_STORAGE_ACCOUNT_URL`, managed-identity s
 ### Database provisioning
 
 - Use Azure SQL / SQL Server 2016+ with database compatibility level **130 or newer**
-  (`ISJSON` is required). Create the database before running the script.
+  (`OPENJSON` is required for migration and parameterized batch writes). Create the database before running the script.
 - Run [database/schema.sql](database/schema.sql) in **Learning's database**.
-  The current learning schema has one JSON-backed table for classes, lessons and the
-  weekly structure; user accounts, role assignments, parent links, branding and SSO
-  requests remain in the central database. JSON is validated by SQL constraints and
-  application schemas, not stored as blob files.
+  Learning uses these relational tables; user accounts, role assignments, parent
+  links, branding and SSO requests remain in the central database:
+
+  | Table | Data |
+  | --- | --- |
+  | `LearningClasses` | Class name, year group and division |
+  | `LearningClassTeachers` | Assigned central user IDs, teacher emails and display names |
+  | `LearningClassStudents` | Student emails and display names, including pending users |
+  | `LearningPeriodTypes` | Admin-defined period types and lesson/break behaviour |
+  | `LearningPeriods` | Day, name, start/end times and period type |
+  | `LearningLessons` | Class, lesson name, description and update time |
+  | `LearningLessonPeriods` | One or more timetable periods assigned to a lesson |
+  | `LearningLessonLinks` | External and Teams resource links |
+  | `LearningLessonFiles` | Blob file IDs, names and sizes, not file bytes |
+  | `LearningSchemaMigrations` | Completed migration versions |
+
+  Foreign keys protect class, lesson and period relationships. Roster/resource order
+  is retained. Central user IDs/emails are external references, not cross-database
+  foreign keys. JSON is used only as transient SQL batch input and to read the old
+  migration archive, not for ongoing Learning record storage.
 - The script can be rerun on an empty or existing compatible database. It does not
   create logins, change the target database, grant permissions or seed example users.
 - If the app creates/upgrades the schema itself, its SQL login needs `CREATE TABLE`
   and `ALTER` on the `dbo` schema in addition to table read/write access. Prefer DBA
   provisioning: after running the script, grant the runtime SQL user
-  `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `dbo.LearningDocuments`. Existing correct
-  schema startup performs validation without DDL. For later schema upgrades, run the
+  `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the Learning tables above, and `SELECT`
+  on the legacy `dbo.LearningDocuments` table if present. For later schema upgrades, run the
   updated script as the DBA first. `sp_getapplock` uses the normal `public` principal.
 - Restrict Azure SQL firewall rules to the Web App's outbound addresses or use VNet
   integration/private endpoints. Allow outbound TCP 1433 (and the configured Azure SQL
@@ -154,6 +170,31 @@ strings are rejected. Do not set `AZURE_STORAGE_ACCOUNT_URL`, managed-identity s
 - Back up the Learning and central databases independently. Run the central Portal's
   own schema/migrations in **its** database for the SSO store; never run the Learning
   script there.
+
+### Migrating an existing document-based Learning database
+
+1. Back up the Learning database before changing the schema. Keep the matching old
+   application release available. Test the script on a restored copy first.
+2. Stop all old Learning instances and prevent automatic scale-out/slot traffic while
+   migrating. Do not run old and new application versions together: the old version
+   writes documents while the new version writes relational tables.
+3. Run the new schema with an appropriately privileged SQL login, or let the new
+   application execute it before accepting requests. Schema changes and data migration
+   run in one transaction under the same application lock as Learning writes.
+4. The migration copies classes, complete teacher/student rosters, periods, period
+   types, lessons, assigned periods and resources. Existing record IDs and Blob references
+   are retained. Legacy array-only structures receive the original Lesson/Break types.
+   Unsupported or inconsistent data stops migration rather than being silently dropped.
+5. `dbo.LearningDocuments`, when present, remains unchanged as an archive. A completed
+   migration marker prevents stale documents being reimported after subsequent edits.
+   New installations do not need that table. There is no runtime fallback to documents.
+6. Verify timetable/class/resource access before restoring traffic. For rollback after
+   relational writes, restore a coordinated database backup and old application release;
+   simply deploying old code would expose stale archive data and lose new changes.
+
+No Azure setting changes, new managed identities, resource reuploads or central-database
+changes are required. Retain the archive until your backup/retention policy permits its
+removal; the application does not delete it automatically.
 
 ### Blob Storage provisioning
 
@@ -252,11 +293,10 @@ Pending-student warnings do not prevent import. These all-or-nothing rules apply
 Learning class uploads; the existing central parent upload has its own preview and
 created/updated/skipped results.
 
-Existing class JSON containing student user IDs remains readable; the class schema
-now uses only each student's email and display name and ignores legacy IDs.
-Existing classes and lessons need no SQL table migration or re-import. The
-`database/schema.sql` table structure is unchanged because memberships are stored
-inside class JSON. New imports persist only email-based student memberships.
+Legacy student user IDs are ignored during migration: memberships use only each
+student's email and display name. Classes and lessons are migrated automatically;
+CSV re-import is not required. New imports persist email-based memberships in
+`LearningClassStudents`.
 
 Class identity is the case-insensitive combination of Class Name, Year Group and
 Division. Importing an existing class **replaces its complete teacher/student roster**
@@ -443,10 +483,9 @@ deletion in both the UI and API, including name, times, day and type. Remove or
 reschedule the lessons first. If any selected day overlaps, a used period was
 changed, or the weekly 140-period limit is exceeded, nothing is committed.
 
-The structure and types are saved atomically in the existing `structure` JSON
-document in `dbo.LearningDocuments`. Existing array-only documents load with the
-original Lesson/Break options and are upgraded on save. No SQL schema migration
-or new Azure settings are required. The structure API accepts `{ slots, periodTypes }`;
+The structure and types are saved atomically in `LearningPeriods` and
+`LearningPeriodTypes`. Legacy structure documents are migrated by the schema script.
+No new Azure settings are required. The structure API accepts `{ slots, periodTypes }`;
 legacy slot-array requests retain the currently saved type list.
 `PUT /api/admin/period-types` independently commits the type list against the
 current persisted periods without committing any unsaved period edits.
@@ -458,9 +497,23 @@ matching/replacement, student/parent/teacher data scoping, session invalidation,
 lesson CRUD, protected downloads, resource upload, admin permissions and shared navigation.
 Infrastructure tests cover SQL-login-only settings, private Blob-only storage, the
 canonical startup schema, optimized upload filenames/byte counts, orientation and
-metadata stripping, animation limits and measured image-size reduction. The schema
-is also suitable for offline T-SQL syntax validation; executing it twice against a
-test database is still required to validate your actual SQL version and permissions.
+metadata stripping, animation limits and measured image-size reduction.
+
+On Windows with SQL Server LocalDB and `sqlcmd` installed, run the opt-in executable
+migration/repository suite:
+
+```powershell
+$env:LEARNING_LOCALDB_TESTS = '1'
+npm test -- server/relational.integration.test.ts
+Remove-Item Env:\LEARNING_LOCALDB_TESTS
+```
+
+It creates a uniquely named disposable LocalDB instance and temporary database, then
+cleans them up. It never uses application SQL settings or a live database. It covers
+fresh installs, repeated migration, legacy array/object structures, custom types,
+rosters/resources, long descriptions, invalid-data rollback, archive retention and
+relational CRUD/foreign-key safeguards. Also rehearse migration on a restored copy
+of the target database to validate your actual SQL version, data and permissions.
 HTTP API tests use an in-memory repository and mocked platform/storage services; they
 do not provision SQL, Entra, mail or Azure storage. Validate those integrations in the
 configured deployment before making the application available to families.

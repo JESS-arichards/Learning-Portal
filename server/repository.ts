@@ -1,34 +1,138 @@
 import { z } from 'zod';
-import { classSchema, lessonSchema, structureSchema, dayStructureSchema, DEFAULT_PERIOD_TYPES, type LearningClass, type Lesson, type Snapshot } from '../shared/learning.js';
-import { pool, sql } from './db.js';
+import {
+  classSchema, lessonSchema, dayStructureSchema, periodTypeId, personSchema, studentSchema,
+  periodTypeSchema, slotSchema, linkSchema, fileSchema, type LearningClass, type Lesson, type Snapshot,
+} from '../shared/learning.js';
+import { sql, transaction } from './db.js';
 
-type Kind = 'class' | 'lesson' | 'structure';
 type Connection = sql.ConnectionPool | sql.Transaction;
-const structureId = '00000000-0000-4000-8000-000000000001';
-export async function snapshot(connection?: Connection) {
-  const result = await (connection ?? await pool()).request().query<{ Kind: Kind; Body: string }>('SELECT Kind, Body FROM dbo.LearningDocuments');
-  const classes: LearningClass[] = [], lessons: Lesson[] = [];
-  let structure = { slots: [] as Snapshot['slots'], periodTypes: DEFAULT_PERIOD_TYPES };
-  for (const row of result.recordset) {
-    const value: unknown = JSON.parse(row.Body);
-    if (row.Kind === 'class') classes.push(classSchema.parse(value));
-    if (row.Kind === 'lesson') lessons.push(lessonSchema.parse(value));
-    if (row.Kind === 'structure') structure = Array.isArray(value)
-      ? { slots: structureSchema.parse(value), periodTypes: DEFAULT_PERIOD_TYPES }
-      : dayStructureSchema.parse(value);
-  }
-  return { classes, lessons, ...structure };
+type Structure = Pick<Snapshot, 'slots' | 'periodTypes'>;
+const uuid = z.string().uuid();
+const classRow = classSchema.omit({ teachers: true, students: true });
+const teacherRow = personSchema.extend({ classId: uuid });
+const studentRow = studentSchema.extend({ classId: uuid });
+const lessonRow = lessonSchema.omit({ slotIds: true, links: true, files: true });
+const lessonPeriodRow = z.object({ lessonId: uuid, periodId: uuid });
+const linkRow = linkSchema.extend({ lessonId: uuid });
+const fileRow = fileSchema.extend({ lessonId: uuid });
+
+async function readSnapshot(connection: Connection): Promise<Snapshot> {
+  const result = await connection.request().query(`
+    SELECT Id AS id, Name AS name, YearGroup AS yearGroup, Division AS division FROM dbo.LearningClasses ORDER BY Name, Id;
+    SELECT ClassId AS classId, UserId AS id, Email AS email, DisplayName AS displayName FROM dbo.LearningClassTeachers ORDER BY ClassId, Position;
+    SELECT ClassId AS classId, Email AS email, DisplayName AS displayName FROM dbo.LearningClassStudents ORDER BY ClassId, Position;
+    SELECT Id AS id, Name AS name, Kind AS kind FROM dbo.LearningPeriodTypes ORDER BY Position;
+    SELECT p.Id AS id, p.Day AS day, p.Name AS name, p.TypeId AS typeId, t.Kind AS kind,
+      p.StartTime AS start, p.EndTime AS [end]
+      FROM dbo.LearningPeriods p JOIN dbo.LearningPeriodTypes t ON t.Id=p.TypeId ORDER BY p.Day, p.StartTime, p.Id;
+    SELECT Id AS id, ClassId AS classId, Name AS name, Description AS description,
+      CONVERT(varchar(40), UpdatedAt, 127) AS updatedAt FROM dbo.LearningLessons ORDER BY Id;
+    SELECT LessonId AS lessonId, PeriodId AS periodId FROM dbo.LearningLessonPeriods ORDER BY LessonId, Position;
+    SELECT Id AS id, LessonId AS lessonId, Kind AS kind, Name AS name, Url AS url FROM dbo.LearningLessonLinks ORDER BY LessonId, Position;
+    SELECT Id AS id, LessonId AS lessonId, 'file' AS kind, Name AS name, CONVERT(float, Size) AS size FROM dbo.LearningLessonFiles ORDER BY LessonId, Position;
+  `);
+  const rows = z.tuple([
+    z.array(classRow), z.array(teacherRow), z.array(studentRow), z.array(periodTypeSchema),
+    z.array(slotSchema), z.array(lessonRow), z.array(lessonPeriodRow), z.array(linkRow), z.array(fileRow),
+  ]).parse(result.recordsets);
+  const [classes, teachers, students, periodTypes, slots, lessons, periods, links, files] = rows;
+  return {
+    ...dayStructureSchema.parse({ slots, periodTypes }),
+    classes: classes.map((classroom) => classSchema.parse({
+      ...classroom,
+      teachers: teachers.filter((teacher) => teacher.classId === classroom.id).map(({ classId: _classId, ...teacher }) => teacher),
+      students: students.filter((student) => student.classId === classroom.id).map(({ classId: _classId, ...student }) => student),
+    })),
+    lessons: lessons.map((lesson) => lessonSchema.parse({
+      ...lesson,
+      slotIds: periods.filter((period) => period.lessonId === lesson.id).map((period) => period.periodId),
+      links: links.filter((link) => link.lessonId === lesson.id).map(({ lessonId: _lessonId, ...link }) => link),
+      files: files.filter((file) => file.lessonId === lesson.id).map(({ lessonId: _lessonId, ...file }) => file),
+    })),
+  };
 }
-export async function save(tx: sql.Transaction, kind: Kind, id: string, value: LearningClass | Lesson | Pick<Snapshot, 'slots' | 'periodTypes'>) {
-  z.string().uuid().parse(id);
-  await tx.request().input('kind', sql.VarChar(16), kind).input('id', sql.UniqueIdentifier, id)
-    .input('body', sql.NVarChar(sql.MAX), JSON.stringify(value)).query(`
-      UPDATE dbo.LearningDocuments SET Body=@body WHERE Kind=@kind AND Id=@id;
-      IF @@ROWCOUNT=0 INSERT dbo.LearningDocuments(Kind,Id,Body) VALUES(@kind,@id,@body);
+
+export async function snapshot(connection?: Connection): Promise<Snapshot> {
+  // Reads take the same transaction lock as writes so all result sets describe one consistent timetable.
+  return connection ? readSnapshot(connection) : transaction(readSnapshot);
+}
+
+function recordRequest(tx: sql.Transaction, id: string, value: LearningClass | Lesson) {
+  uuid.parse(id);
+  if (value.id !== id) throw new Error('The saved ID must match the record ID.');
+  return tx.request().input('id', sql.UniqueIdentifier, id)
+    .input('value', sql.NVarChar(sql.MAX), JSON.stringify(value));
+}
+
+export async function save(tx: sql.Transaction, kind: 'class' | 'lesson', id: string, value: LearningClass | Lesson): Promise<void> {
+  if (kind === 'class') {
+    const classroom = classSchema.parse(value);
+    await recordRequest(tx, id, classroom).query(`
+      UPDATE dbo.LearningClasses SET Name=JSON_VALUE(@value,'$.name'), YearGroup=JSON_VALUE(@value,'$.yearGroup'),
+        Division=JSON_VALUE(@value,'$.division') WHERE Id=@id;
+      IF @@ROWCOUNT=0 INSERT dbo.LearningClasses(Id,Name,YearGroup,Division)
+        VALUES(@id,JSON_VALUE(@value,'$.name'),JSON_VALUE(@value,'$.yearGroup'),JSON_VALUE(@value,'$.division'));
+      DELETE FROM dbo.LearningClassTeachers WHERE ClassId=@id;
+      INSERT dbo.LearningClassTeachers(ClassId,UserId,Email,DisplayName,Position)
+        SELECT @id, p.id, p.email, p.displayName, CONVERT(int,j.[key])
+        FROM OPENJSON(@value,'$.teachers') j
+        CROSS APPLY OPENJSON(j.value) WITH (id int, email nvarchar(320), displayName nvarchar(200)) p;
+      DELETE FROM dbo.LearningClassStudents WHERE ClassId=@id;
+      INSERT dbo.LearningClassStudents(ClassId,Email,DisplayName,Position)
+        SELECT @id, p.email, p.displayName, CONVERT(int,j.[key])
+        FROM OPENJSON(@value,'$.students') j
+        CROSS APPLY OPENJSON(j.value) WITH (email nvarchar(320), displayName nvarchar(200)) p;
+    `);
+    return;
+  }
+  const lesson = lessonSchema.parse(value);
+  await recordRequest(tx, id, lesson).query(`
+    UPDATE l SET ClassId=JSON_VALUE(@value,'$.classId'),Name=JSON_VALUE(@value,'$.name'),
+      Description=p.description,UpdatedAt=JSON_VALUE(@value,'$.updatedAt')
+      FROM dbo.LearningLessons l CROSS APPLY OPENJSON(@value) WITH (description nvarchar(max)) p WHERE l.Id=@id;
+    IF @@ROWCOUNT=0 INSERT dbo.LearningLessons(Id,ClassId,Name,Description,UpdatedAt)
+      SELECT @id, JSON_VALUE(@value,'$.classId'),JSON_VALUE(@value,'$.name'),p.description,JSON_VALUE(@value,'$.updatedAt')
+      FROM OPENJSON(@value) WITH (description nvarchar(max)) p;
+    DELETE FROM dbo.LearningLessonPeriods WHERE LessonId=@id;
+    INSERT dbo.LearningLessonPeriods(LessonId,PeriodId,Position)
+      SELECT @id, CONVERT(uniqueidentifier,value), CONVERT(int,[key]) FROM OPENJSON(@value,'$.slotIds');
+    DELETE FROM dbo.LearningLessonLinks WHERE LessonId=@id;
+    INSERT dbo.LearningLessonLinks(Id,LessonId,Kind,Name,Url,Position)
+      SELECT p.id,@id,p.kind,p.name,p.url,CONVERT(int,j.[key]) FROM OPENJSON(@value,'$.links') j
+      CROSS APPLY OPENJSON(j.value) WITH (id uniqueidentifier,kind varchar(5),name nvarchar(200),url nvarchar(2000)) p;
+    DELETE FROM dbo.LearningLessonFiles WHERE LessonId=@id;
+    INSERT dbo.LearningLessonFiles(Id,LessonId,Name,Size,Position)
+      SELECT p.id,@id,p.name,p.size,CONVERT(int,j.[key]) FROM OPENJSON(@value,'$.files') j
+      CROSS APPLY OPENJSON(j.value) WITH (id uniqueidentifier,name nvarchar(200),size bigint) p;
+  `);
+}
+
+export async function saveStructure(tx: sql.Transaction, structure: Structure): Promise<void> {
+  const parsed = dayStructureSchema.parse(structure);
+  await tx.request()
+    .input('types', sql.NVarChar(sql.MAX), JSON.stringify(parsed.periodTypes))
+    .input('periods', sql.NVarChar(sql.MAX), JSON.stringify(parsed.slots.map((slot) => ({ ...slot, typeId: periodTypeId(slot) }))))
+    .query(`
+      DECLARE @typesTable TABLE (id nvarchar(36) COLLATE Latin1_General_100_CI_AS,name nvarchar(100),kind varchar(6),position int);
+      INSERT @typesTable SELECT p.id,p.name,p.kind,CONVERT(int,j.[key]) FROM OPENJSON(@types) j
+        CROSS APPLY OPENJSON(j.value) WITH (id nvarchar(36),name nvarchar(100),kind varchar(6)) p;
+      DECLARE @periodsTable TABLE (id uniqueidentifier,day int,name nvarchar(100),typeId nvarchar(36),startTime char(5),endTime char(5));
+      INSERT @periodsTable SELECT id,day,name,typeId,startTime,endTime FROM OPENJSON(@periods)
+        WITH (id uniqueidentifier,day int,name nvarchar(100),typeId nvarchar(36),startTime char(5) '$.start',endTime char(5) '$.end');
+      UPDATE t SET Name=s.name,Kind=s.kind,Position=s.position FROM dbo.LearningPeriodTypes t JOIN @typesTable s ON s.id=t.Id;
+      INSERT dbo.LearningPeriodTypes(Id,Name,Kind,Position)
+        SELECT id,name,kind,position FROM @typesTable s WHERE NOT EXISTS (SELECT 1 FROM dbo.LearningPeriodTypes t WHERE t.Id=s.id);
+      UPDATE p SET Day=s.day,Name=s.name,TypeId=s.typeId,StartTime=s.startTime,EndTime=s.endTime
+        FROM dbo.LearningPeriods p JOIN @periodsTable s ON s.id=p.Id;
+      INSERT dbo.LearningPeriods(Id,Day,Name,TypeId,StartTime,EndTime)
+        SELECT id,day,name,typeId,startTime,endTime FROM @periodsTable s WHERE NOT EXISTS (SELECT 1 FROM dbo.LearningPeriods p WHERE p.Id=s.id);
+      DELETE FROM dbo.LearningPeriods WHERE Id NOT IN (SELECT id FROM @periodsTable);
+      DELETE FROM dbo.LearningPeriodTypes WHERE Id NOT IN (SELECT id FROM @typesTable);
     `);
 }
-export function saveStructure(tx: sql.Transaction, structure: Pick<Snapshot, 'slots' | 'periodTypes'>) { return save(tx, 'structure', structureId, structure); }
-export async function remove(tx: sql.Transaction, kind: Kind, id: string) {
-  await tx.request().input('kind', sql.VarChar(16), kind).input('id', sql.UniqueIdentifier, id)
-    .query('DELETE FROM dbo.LearningDocuments WHERE Kind=@kind AND Id=@id');
+
+export async function remove(tx: sql.Transaction, kind: 'class' | 'lesson', id: string): Promise<void> {
+  uuid.parse(id);
+  const table = kind === 'class' ? 'LearningClasses' : 'LearningLessons';
+  await tx.request().input('id', sql.UniqueIdentifier, id).query(`DELETE FROM dbo.${table} WHERE Id=@id`);
 }
