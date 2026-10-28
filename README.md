@@ -627,6 +627,15 @@ Resource-only saves are allowed while live meetings exist; lesson details and
 schedules remain protected against invitation drift. A resource-only save never
 recreates cancelled occurrences. Shared files and external links appear on every occurrence;
 Teams links are specific to their matching dated occurrence.
+Published lesson descriptions remain visible. In timetables and class lesson cards,
+one **Open Lesson Resources** button below the description reveals the Teams, file
+and external-link buttons; it changes to **Hide Lesson Resources** when expanded.
+Teams links use the Microsoft Teams brand icon; files and external links use their
+corresponding download/link icons. Timetables show only the matching occurrence's
+confirmed meeting, while class cards include dated meetings for the series.
+The bundled Microsoft Teams icon is sourced from [Simple Icons v11.15.0](https://github.com/simple-icons/simple-icons/tree/11.15.0)
+under [CC0](https://github.com/simple-icons/simple-icons/blob/11.15.0/LICENSE.md);
+the Microsoft Teams trademark belongs to Microsoft.
 
 ### Global UK display-date policy
 

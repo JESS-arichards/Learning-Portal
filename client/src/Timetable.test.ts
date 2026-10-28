@@ -39,25 +39,31 @@ describe('dated timetable', () => {
         holidays: [{ id: 'holiday', yearId: 'year', name: 'Closure', start: '2026-11-09', end: '2026-11-09' }],
         ...overrides,
       },
-      lessons: [{ ...data.lessons[0], schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
+      lessons: [{ ...data.lessons[0], description: 'Read the worksheet before joining.', schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
         occurrences: [{ id: 'occurrence', date: '2026-10-26', slotId: 'period' }] }],
       meetings: [{ occurrenceId: 'occurrence', lessonId: 'first', organizerUserId: 1, state: 'created', joinUrl: 'https://teams.microsoft.com/test', ...meeting }],
     };
     return renderToStaticMarkup(createElement(Timetable, { data: snapshot, user, children: [child] }));
   }
-  it('shows only this date’s lessons and its live join link', () => {
+  it('shows only this date’s lessons with its live link initially behind the resources toggle', () => {
     const html = dated('2026-10-26');
     expect(html).toContain('Fractions');
-    expect(html).toContain('Join live lesson');
+    expect(html).toContain('Open Lesson Resources');
+    expect(html).not.toContain('https://teams.microsoft.com/test');
+    expect(html).toContain('<p class="description">Read the worksheet before joining.</p>');
+    expect(html.indexOf('Read the worksheet before joining.')).toBeLessThan(html.indexOf('Open Lesson Resources'));
+    expect(html).not.toContain('View lesson');
     expect(html).toContain('2026-10-26');
     expect(html).toContain('current-period');
   });
-  it('uses the saved meeting title for the matching date and hides unconfirmed or other-date links', () => {
+  it('offers resources only for the matching date and confirmed meeting', () => {
     const meeting = { title: 'Fractions group workshop', optionsApplied: true };
-    expect(dated('2026-10-26', meeting)).toContain('Fractions group workshop');
+    expect(dated('2026-10-26', meeting)).toContain('Open Lesson Resources');
     expect(dated('2026-11-02', meeting)).not.toContain('Fractions group workshop');
     expect(dated('2026-10-26', { ...meeting, optionsApplied: false })).not.toContain('https://teams.microsoft.com/test');
     expect(dated('2026-10-26', { ...meeting, state: 'cancelled' })).not.toContain('https://teams.microsoft.com/test');
+    expect(dated('2026-10-26', { ...meeting, optionsApplied: false })).not.toContain('Open Lesson Resources');
+    expect(dated('2026-10-26', { ...meeting, state: 'cancelled' })).not.toContain('Open Lesson Resources');
   });
   it('puts each day and date together in a bold heading above the counts', () => {
     const html = dated('2026-10-28');

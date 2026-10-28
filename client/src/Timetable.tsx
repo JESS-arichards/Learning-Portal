@@ -3,6 +3,7 @@ import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
 import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
 import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday, timetableWeek } from '../../shared/calendar';
 import { DATE_DISPLAY_POLICY, formatDate } from '../../shared/dateFormatting';
+import teamsLogo from './assets/microsoft-teams.svg';
 
 const schoolClock = new Intl.DateTimeFormat(DATE_DISPLAY_POLICY.locale, {
   timeZone: 'Asia/Dubai', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
@@ -19,37 +20,44 @@ function schoolTime() {
 }
 
 export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?: LiveMeeting[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const resourceId = useId();
+  const liveMeetings = meetings.filter((meeting) => meeting.lessonId === lesson.id && meeting.state === 'created'
+    && meeting.optionsApplied !== false && meeting.joinUrl);
+  if (!lesson.links.length && !lesson.files.length && !liveMeetings.length) return null;
   return (
-    <div className="resource-list">
-      {lesson.links.map((link) => <a key={link.id} className={`resource ${link.kind}`} href={link.url} target="_blank" rel="noopener noreferrer">
-        <ExternalLink size={16} /><span>{link.name}</span><small>{link.kind === 'teams' ? 'Join Teams' : 'Open link'}</small>
-      </a>)}
-      {lesson.files.map((file) => <a key={file.id} className="resource" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
-        <FileDown size={16} /><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small>
-      </a>)}
-      {meetings.filter((meeting) => meeting.lessonId === lesson.id && meeting.state === 'created' && meeting.optionsApplied !== false && meeting.joinUrl).map((meeting) => {
-        const occurrence = lesson.occurrences?.find((item) => item.id === meeting.occurrenceId);
-        return <a key={meeting.occurrenceId} className="resource teams" href={meeting.joinUrl!} target="_blank" rel="noopener noreferrer">
-          <ExternalLink size={16} /><span>{meeting.title ?? lesson.name}</span><small>{occurrence ? formatDate(occurrence.date) : ''} &middot; Join Teams</small>
-        </a>;
-      })}
+    <div className="lesson-resources">
+      <button type="button" className="btn secondary" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={resourceId}>
+        {expanded ? 'Hide Lesson Resources' : 'Open Lesson Resources'}
+      </button>
+      <div id={resourceId} className="resource-list" hidden={!expanded}>
+        {expanded && <>
+          {lesson.links.map((link) => <a key={link.id} className={`btn secondary resource ${link.kind}`} href={link.url} target="_blank" rel="noopener noreferrer">
+            {link.kind === 'teams' ? <img className="teams-logo" src={teamsLogo} alt="Microsoft Teams" /> : <ExternalLink size={18} aria-hidden="true" />}
+            <span>{link.name}</span><small>{link.kind === 'teams' ? 'Join Teams' : 'Open link'}</small>
+          </a>)}
+          {lesson.files.map((file) => <a key={file.id} className="btn secondary resource file" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
+            <FileDown size={18} aria-hidden="true" /><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small>
+          </a>)}
+          {liveMeetings.map((meeting) => {
+            const occurrence = lesson.occurrences?.find((item) => item.id === meeting.occurrenceId);
+            return <a key={meeting.occurrenceId} className="btn secondary resource teams" href={meeting.joinUrl!} target="_blank" rel="noopener noreferrer">
+              <img className="teams-logo" src={teamsLogo} alt="Microsoft Teams" /><span>{meeting.title ?? lesson.name}</span><small>{occurrence ? formatDate(occurrence.date) : ''} &middot; Join Teams</small>
+            </a>;
+          })}
+        </>}
+      </div>
     </div>
   );
 }
 function LessonCard({ lesson, classroom, meeting }: { lesson: Lesson; classroom: LearningClass; meeting?: LiveMeeting }) {
-  const [expanded, setExpanded] = useState(false);
-  const detailId = useId();
-  const hasDetails = Boolean(lesson.description || lesson.files.length || lesson.links.length);
   return <article className="lesson-card">
     <div className="lesson-accent" />
     <div className="lesson-card-body">
       <p className="eyebrow">{classroom.name}</p><h3>{lesson.name}</h3>
       <p className="teacher">{classroom.teachers.map((t) => t.displayName).join(', ')}</p>
-      {meeting?.joinUrl && meeting.optionsApplied !== false && <a className="btn primary" href={meeting.joinUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} /> {meeting.title ?? 'Join live lesson'}</a>}
-      {hasDetails && <button className="text-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={detailId}>
-        {expanded ? 'Hide lesson details' : `View lesson${lesson.files.length + lesson.links.length ? ` & ${lesson.files.length + lesson.links.length} resources` : ''}`}
-      </button>}
-      {expanded && <div id={detailId}><p className="description">{lesson.description}</p><Resources lesson={lesson} /></div>}
+      {lesson.description && <p className="description">{lesson.description}</p>}
+      <Resources lesson={lesson} meetings={meeting ? [meeting] : []} />
     </div>
   </article>;
 }

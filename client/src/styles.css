@@ -94,12 +94,17 @@ legend { padding: 0 8px; font-size: .9rem; }
 .description { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; }
 .free-period, .break-card { padding: 19px 22px; border: 1px dashed var(--border); border-radius: 10px; color: var(--text-muted); font-size: .84rem; background: var(--glass-bg); }
 .break-card { display: flex; align-items: center; gap: 13px; border-style: solid; }
-.resource-list { display: grid; gap: 8px; margin: 12px 0 0; }
+.lesson-resources { margin-top: 12px; }
+.resource-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.resource-list[hidden] { display: none; }
 .resource { display: flex; gap: 10px; align-items: center; padding: 11px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; font-size: .8rem; }
 .resource span { flex: 1; overflow-wrap: anywhere; min-width: 0; }
 .resource small { font-size: .65rem; color: var(--text-muted); white-space: nowrap; }
 .resource.teams { border-color: #a9a9f045; background: #8482cd16; }
 .resource:hover { background: #ffffff0f; }
+.resource.btn { flex: 0 1 auto; max-width: 100%; justify-content: flex-start; text-align: left; }
+.resource > svg, .teams-logo { flex-shrink: 0; }
+.teams-logo { width: 22px; height: 22px; filter: invert(1); }
 .family-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 32px; align-items: start; }
 .family-layout > *, .timetable-area { min-width: 0; }
 .children-panel { position: sticky; top: 104px; padding: 24px 18px; }
