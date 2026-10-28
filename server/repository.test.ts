@@ -58,6 +58,16 @@ describe('relational Learning repository', () => {
     await snapshot(tx);
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
+  it('reads named meetings and validates stored options without masking corrupt metadata', async () => {
+    const rows = records();
+    const meeting = { occurrenceId: uuid(30), lessonId: lesson.id, organizerUserId: 10, state: 'created',
+      title: 'Maths workshop', joinUrl: 'https://teams.microsoft.com/test', options: '{"allowBreakoutRooms":true}', optionsApplied: false };
+    rows[14] = [meeting];
+    mocks.query.mockResolvedValue({ recordsets: rows });
+    expect((await snapshot()).meetings?.[0]).toEqual({ ...meeting, options: { allowBreakoutRooms: true } });
+    rows[14] = [{ ...meeting, options: '{"allowBreakoutRooms":"yes"}' }];
+    await expect(snapshot()).rejects.toThrow();
+  });
   it('rejects invalid relational rows and empty type lists instead of silently supplying defaults', async () => {
     const rows = records(); rows[3] = [];
     mocks.query.mockResolvedValue({ recordsets: rows });

@@ -480,6 +480,17 @@ BEGIN TRY
       CONSTRAINT CK_LearningTeamsConnections_Payload CHECK (Payload LIKE N'v1.%')
     );
 
+  IF COL_LENGTH('dbo.LearningLiveMeetings', 'Title') IS NULL
+    ALTER TABLE dbo.LearningLiveMeetings ADD Title nvarchar(200) NULL;
+  IF COL_LENGTH('dbo.LearningLiveMeetings', 'Options') IS NULL
+    ALTER TABLE dbo.LearningLiveMeetings ADD Options nvarchar(max) NULL
+      CONSTRAINT CK_LearningLiveMeetings_Options CHECK (Options IS NULL OR ISJSON(Options)=1);
+  IF COL_LENGTH('dbo.LearningLiveMeetings', 'OptionsApplied') IS NULL
+    ALTER TABLE dbo.LearningLiveMeetings ADD OptionsApplied bit NOT NULL
+      CONSTRAINT DF_LearningLiveMeetings_OptionsApplied DEFAULT(1) WITH VALUES;
+  IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=3)
+    INSERT dbo.LearningSchemaMigrations(Version) VALUES(3);
+
   COMMIT TRANSACTION;
 END TRY
 BEGIN CATCH

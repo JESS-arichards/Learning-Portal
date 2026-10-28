@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   classSchema, lessonSchema, dayStructureSchema, periodTypeId, personSchema, studentSchema,
-  periodTypeSchema, slotSchema, linkSchema, fileSchema, type LearningClass, type Lesson, type Snapshot,
+  periodTypeSchema, slotSchema, linkSchema, fileSchema, meetingOptionsSchema, type LearningClass, type Lesson, type Snapshot,
 } from '../shared/learning.js';
 import { sql, transaction } from './db.js';
 import { academicCalendarSchema, occurrenceSchema } from '../shared/calendar.js';
@@ -37,19 +37,22 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
     SELECT Id AS id, LessonId AS lessonId, PeriodId AS slotId, CONVERT(char(10),LessonDate,23) AS date FROM dbo.LearningOccurrences ORDER BY LessonDate, PeriodId;
     SELECT Id AS lessonId, Schedule AS schedule FROM dbo.LearningLessons WHERE Schedule IS NOT NULL;
     SELECT m.OccurrenceId AS occurrenceId, o.LessonId AS lessonId, m.OrganizerUserId AS organizerUserId,
-      m.State AS state, m.JoinUrl AS joinUrl FROM dbo.LearningLiveMeetings m JOIN dbo.LearningOccurrences o ON o.Id=m.OccurrenceId;
+      m.State AS state, m.JoinUrl AS joinUrl, m.Title AS title, m.Options AS options, m.OptionsApplied AS optionsApplied
+      FROM dbo.LearningLiveMeetings m JOIN dbo.LearningOccurrences o ON o.Id=m.OccurrenceId;
   `);
   const rows = z.tuple([
     z.array(classRow), z.array(teacherRow), z.array(studentRow), z.array(periodTypeSchema),
     z.array(slotSchema), z.array(lessonRow), z.array(lessonPeriodRow), z.array(linkRow), z.array(fileRow),
     academicCalendarSchema.shape.years, academicCalendarSchema.shape.terms, academicCalendarSchema.shape.holidays,
     z.array(occurrenceSchema.extend({ lessonId: uuid })), z.array(z.object({ lessonId: uuid, schedule: z.string() })),
-    z.array(z.object({ occurrenceId: uuid, lessonId: uuid, organizerUserId: z.number(), state: z.enum(['pending', 'created', 'cancelled']), joinUrl: z.string().nullable() })),
+    z.array(z.object({ occurrenceId: uuid, lessonId: uuid, organizerUserId: z.number(), state: z.enum(['pending', 'created', 'cancelled']), joinUrl: z.string().nullable(),
+      title: z.string().nullable().optional(), options: z.string().nullable().optional(), optionsApplied: z.boolean() })),
   ]).parse(result.recordsets);
   const [classes, teachers, students, periodTypes, slots, lessons, periods, links, files, years, terms, holidays, occurrences, schedules, meetings] = rows;
   return {
     ...dayStructureSchema.parse({ slots, periodTypes }),
-    calendar: academicCalendarSchema.parse({ years, terms, holidays }), meetings,
+    calendar: academicCalendarSchema.parse({ years, terms, holidays }),
+    meetings: meetings.map((meeting) => ({ ...meeting, options: meeting.options ? meetingOptionsSchema.parse(JSON.parse(meeting.options)) : null })),
     classes: classes.map((classroom) => classSchema.parse({
       ...classroom,
       teachers: teachers.filter((teacher) => teacher.classId === classroom.id).map(({ classId: _classId, ...teacher }) => teacher),

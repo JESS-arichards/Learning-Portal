@@ -59,6 +59,7 @@ async function call(path: string, method = 'GET', body?: unknown, authenticated 
   }, ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }) });
 }
 const draft = { classId: uuid(1), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)], schedule: { startDate: '2026-10-27', frequency: 'once', count: 1 } };
+const resourceLink = { id: uuid(80), kind: 'link', name: 'Lesson reading', url: 'https://school.test/reading' };
 beforeEach(async () => {
   config.SQL_SERVERLESS_ENABLED = false;
   config.ALLOW_SCHEDULE_RESET = false;
@@ -95,6 +96,61 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('adds, edits and removes named links without changing a live lesson schedule or its meetings', async () => {
+    state.lessons[0].schedule = { startDate: '2026-10-26', frequency: 'once', count: 1 };
+    state.lessons[0].occurrences = [{ id: uuid(81), date: '2026-10-26', slotId: uuid(3) }];
+    state.meetings = [{ occurrenceId: uuid(81), lessonId: uuid(6), organizerUserId: 10, state: 'created',
+      joinUrl: 'https://teams.microsoft.com/test', title: 'Maths live', optionsApplied: true }];
+    const before = structuredClone(state);
+    expect((await call(`/lessons/${uuid(6)}/links`, 'POST', resourceLink)).status).toBe(200);
+    expect((await call(`/lessons/${uuid(6)}/links`, 'POST', resourceLink)).status).toBe(200);
+    expect(state.lessons[0].links).toEqual([resourceLink]);
+    const edited = { ...resourceLink, name: 'Updated reading', url: 'https://school.test/new-reading' };
+    expect((await call(`/lessons/${uuid(6)}/links/${resourceLink.id}`, 'PUT', edited)).status).toBe(200);
+    expect(state.lessons[0].links).toEqual([edited]);
+    expect((await call(`/lessons/${uuid(6)}/links/${resourceLink.id}`, 'DELETE')).status).toBe(200);
+    expect(state.lessons[0]).toMatchObject({ ...before.lessons[0], links: [], updatedAt: expect.any(String) });
+    expect(state.meetings).toEqual(before.meetings);
+    expect(state.lessons[0].files).toEqual(before.lessons[0].files);
+  });
+  it('enforces resource-link authorization for students, parents and unassigned teachers', async () => {
+    state.lessons[0].links = [resourceLink];
+    for (const actor of [user(20, ['Student']), user(30, ['Parent'], [person(20).email]), user(11, ['Staff'])]) {
+      current = actor;
+      expect((await call(`/lessons/${uuid(6)}/links`, 'POST', resourceLink)).status).toBe(403);
+      expect((await call(`/lessons/${uuid(6)}/links/${resourceLink.id}`, 'PUT', resourceLink)).status).toBe(403);
+      expect((await call(`/lessons/${uuid(6)}/links/${resourceLink.id}`, 'DELETE')).status).toBe(403);
+    }
+    expect(state.lessons[0].links).toEqual([resourceLink]);
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('rejects invalid URLs, mismatched IDs, missing links and duplicate-ID conflicts', async () => {
+    const endpoint = `/lessons/${uuid(6)}/links`;
+    for (const url of ['http://school.test', 'javascript:alert(1)', 'https://user:password@school.test/'])
+      expect((await call(endpoint, 'POST', { ...resourceLink, url })).status).toBe(400);
+    expect((await call(`${endpoint}/${uuid(82)}`, 'PUT', resourceLink)).status).toBe(400);
+    expect((await call(`${endpoint}/${resourceLink.id}`, 'PUT', resourceLink)).status).toBe(404);
+    expect((await call(`${endpoint}/${resourceLink.id}`, 'DELETE')).status).toBe(404);
+    expect((await call(endpoint, 'POST', resourceLink)).status).toBe(200);
+    expect((await call(endpoint, 'POST', { ...resourceLink, name: 'Different' })).status).toBe(409);
+  });
+  it('enforces the resource limit on additions but permits edits at the limit', async () => {
+    state.lessons[0].links = Array.from({ length: 30 }, (_, index) => ({ ...resourceLink, id: uuid(100 + index) }));
+    expect((await call(`/lessons/${uuid(6)}/links`, 'POST', resourceLink)).status).toBe(400);
+    const edit = { ...state.lessons[0].links[0], name: 'Updated at limit' };
+    expect((await call(`/lessons/${uuid(6)}/links/${edit.id}`, 'PUT', edit)).status).toBe(200);
+    expect(state.lessons[0].links[0].name).toBe(edit.name);
+  });
+  it('withholds the join URL while settings are unconfirmed, without hiding teacher recovery status', async () => {
+    state.meetings = [{ occurrenceId: uuid(81), lessonId: uuid(6), organizerUserId: 10, state: 'created',
+      joinUrl: 'https://teams.microsoft.com/test', title: 'Maths live', optionsApplied: false }];
+    for (const actor of [user(10, ['Staff']), user(20, ['Student'])]) {
+      current = actor;
+      const response = await call('/learning');
+      expect(response.status).toBe(200);
+      expect((await response.json()).meetings[0]).toMatchObject({ joinUrl: null, optionsApplied: false, title: 'Maths live' });
+    }
+  });
   it('serves standalone liveness without SQL, storage, platform or authentication calls', async () => {
     vi.clearAllMocks();
     const response = await call('/live', 'GET', undefined, false);

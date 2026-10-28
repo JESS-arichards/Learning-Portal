@@ -28,7 +28,7 @@ function render(current: User, children: Student[]) {
 afterEach(() => vi.useRealTimers());
 
 describe('dated timetable', () => {
-  function dated(date: string) {
+  function dated(date: string, meeting: Partial<NonNullable<Snapshot['meetings']>[number]> = {}) {
     vi.useFakeTimers(); vi.setSystemTime(new Date(`${date}T04:30:00Z`));
     const snapshot: Snapshot = {
       ...data,
@@ -39,7 +39,7 @@ describe('dated timetable', () => {
       },
       lessons: [{ ...data.lessons[0], schedule: { startDate: '2026-10-26', frequency: 'once', count: 1 },
         occurrences: [{ id: 'occurrence', date: '2026-10-26', slotId: 'period' }] }],
-      meetings: [{ occurrenceId: 'occurrence', lessonId: 'first', organizerUserId: 1, state: 'created', joinUrl: 'https://teams.microsoft.com/test' }],
+      meetings: [{ occurrenceId: 'occurrence', lessonId: 'first', organizerUserId: 1, state: 'created', joinUrl: 'https://teams.microsoft.com/test', ...meeting }],
     };
     return renderToStaticMarkup(createElement(Timetable, { data: snapshot, user, children: [child] }));
   }
@@ -49,6 +49,13 @@ describe('dated timetable', () => {
     expect(html).toContain('Join live lesson');
     expect(html).toContain('2026-10-26');
     expect(html).toContain('current-period');
+  });
+  it('uses the saved meeting title for the matching date and hides unconfirmed or other-date links', () => {
+    const meeting = { title: 'Fractions group workshop', optionsApplied: true };
+    expect(dated('2026-10-26', meeting)).toContain('Fractions group workshop');
+    expect(dated('2026-11-02', meeting)).not.toContain('Fractions group workshop');
+    expect(dated('2026-10-26', { ...meeting, optionsApplied: false })).not.toContain('https://teams.microsoft.com/test');
+    expect(dated('2026-10-26', { ...meeting, state: 'cancelled' })).not.toContain('https://teams.microsoft.com/test');
   });
   it('puts each day and date together in a bold heading above the counts', () => {
     const html = dated('2026-10-28');

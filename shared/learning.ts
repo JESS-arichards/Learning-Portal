@@ -162,10 +162,21 @@ export const lessonSchema = lessonInputSchema.extend({
   occurrences: z.array(occurrenceSchema).optional(),
 });
 export type Lesson = z.infer<typeof lessonSchema>;
+export const meetingOptionsSchema = z.object({
+  allowBreakoutRooms: z.boolean(),
+}).strict();
+export const meetingRequestSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  options: meetingOptionsSchema,
+}).strict();
+export type MeetingRequest = z.infer<typeof meetingRequestSchema>;
 export interface LiveMeeting {
   occurrenceId: string; lessonId: string; organizerUserId: number;
   state: 'pending' | 'created' | 'cancelled';
   joinUrl: string | null;
+  title?: string | null;
+  options?: z.infer<typeof meetingOptionsSchema> | null;
+  optionsApplied?: boolean;
 }
 export interface Snapshot {
   classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[];

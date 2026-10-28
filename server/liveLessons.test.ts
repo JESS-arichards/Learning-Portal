@@ -5,9 +5,9 @@ import type { Snapshot, User } from '../shared/learning.js';
 import { DEFAULT_PERIOD_TYPES } from '../shared/learning.js';
 import { HttpError, createErrorHandler } from './errors.js';
 
-const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), create: vi.fn(), cancel: vi.fn(), status: vi.fn(), validate: vi.fn(), query: vi.fn() }));
+const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), create: vi.fn(), cancel: vi.fn(), status: vi.fn(), validate: vi.fn(), query: vi.fn(), options: vi.fn() }));
 vi.mock('./repository.js', () => ({ snapshot: mocks.snapshot }));
-vi.mock('./teams.js', () => ({ createTeamsEvent: mocks.create, cancelTeamsEvent: mocks.cancel, teamsStatus: mocks.status, validateTeamsEventInput: mocks.validate }));
+vi.mock('./teams.js', () => ({ createTeamsEvent: mocks.create, cancelTeamsEvent: mocks.cancel, teamsStatus: mocks.status, validateTeamsEventInput: mocks.validate, applyTeamsMeetingOptions: mocks.options }));
 vi.mock('./db.js', async () => ({
   sql: (await import('mssql')).default,
   transaction: async (work: (tx: object) => Promise<unknown>) => {
@@ -43,10 +43,13 @@ beforeEach(async () => {
   mocks.validate.mockImplementation((_user, input) => input);
   mocks.create.mockResolvedValue({ eventId: 'event-one', joinUrl: 'https://teams.microsoft.com/l/meetup-join/test' });
   mocks.cancel.mockResolvedValue({ status: 'cancelled' });
+  mocks.options.mockReset().mockResolvedValue(undefined);
   mocks.query.mockImplementation(async (query: string, parameters: Map<string, unknown>) => {
-    if (query.startsWith('INSERT')) data.meetings!.push({ occurrenceId: uuid(3), lessonId: uuid(1), organizerUserId: actor.id, state: 'pending', joinUrl: null });
+    if (query.startsWith('INSERT')) data.meetings!.push({ occurrenceId: uuid(3), lessonId: uuid(1), organizerUserId: actor.id, state: 'pending', joinUrl: null,
+      title: String(parameters.get('title')), options: parameters.get('options') ? JSON.parse(String(parameters.get('options'))) : null, optionsApplied: Boolean(parameters.get('applied')) });
     if (query.includes("SET State='created'")) Object.assign(data.meetings![0], { state: 'created', joinUrl: parameters.get('url') });
     if (query.includes("SET State='cancelled'")) Object.assign(data.meetings![0], { state: 'cancelled', joinUrl: null });
+    if (query.includes('SET OptionsApplied=1')) Object.assign(data.meetings![0], { optionsApplied: true });
     return { recordset: [{ eventId: 'event-one' }] };
   });
   const app = express();
@@ -60,7 +63,8 @@ beforeEach(async () => {
   origin = `http://127.0.0.1:${address.port}`;
 });
 afterEach(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
-async function post(suffix = '') { return fetch(origin + path + suffix, { method: 'POST' }); }
+async function post(suffix = '', body?: unknown) { return fetch(origin + path + suffix, { method: 'POST',
+  ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) }); }
 it('creates an event from the server roster and durable occurrence ID, then avoids duplicates', async () => {
   expect((await post()).status).toBe(200);
   expect(mocks.create).toHaveBeenCalledWith(actor, expect.objectContaining({ transactionId: uuid(3), date: '2026-10-26', attendees: data.classes[0].students, start: '08:00' }));
@@ -120,4 +124,50 @@ it('leaves meeting state unchanged when Microsoft rejects cancellation', async (
   mocks.cancel.mockRejectedValueOnce(new HttpError(503, 'Graph unavailable'));
   expect((await post('/cancel')).status).toBe(503);
   expect(data.meetings![0].state).toBe('created');
+});
+const request = { title: 'Fractions live workshop', options: { allowBreakoutRooms: true } };
+it('persists the requested title and options, using the meeting name for the calendar event', async () => {
+  const response = await post('', request);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ title: request.title, options: request.options, optionsApplied: true });
+  expect(mocks.create).toHaveBeenCalledWith(actor, expect.objectContaining({ subject: request.title }));
+  expect(mocks.options).toHaveBeenCalledWith(actor, 'https://teams.microsoft.com/l/meetup-join/test', request.options);
+  expect((await post('', request)).status).toBe(200);
+  expect(mocks.create).toHaveBeenCalledOnce();
+  expect(mocks.options).toHaveBeenCalledOnce();
+});
+it('persists a created event before settings fail and retries settings without another invitation', async () => {
+  mocks.options.mockRejectedValueOnce(new HttpError(503, 'Meeting options unavailable'));
+  expect((await post('', request)).status).toBe(503);
+  expect(data.meetings![0]).toMatchObject({ state: 'created', optionsApplied: false, title: request.title });
+  expect((await post('', request)).status).toBe(200);
+  expect(mocks.create).toHaveBeenCalledOnce();
+  expect(mocks.options).toHaveBeenCalledTimes(2);
+  expect(data.meetings![0].optionsApplied).toBe(true);
+});
+it('allows cancelling the known calendar event when settings failed', async () => {
+  mocks.options.mockRejectedValueOnce(new HttpError(503, 'Meeting options unavailable'));
+  await post('', request);
+  expect((await post('/cancel')).status).toBe(200);
+  expect(mocks.cancel).toHaveBeenCalledOnce();
+});
+it('rejects changed retry parameters for both pending and created meetings', async () => {
+  mocks.create.mockRejectedValueOnce(new HttpError(504, 'Ambiguous creation'));
+  expect((await post('', request)).status).toBe(504);
+  expect((await post('', { ...request, title: 'Changed name' })).status).toBe(409);
+  expect((await post('', request)).status).toBe(200);
+  expect((await post('', { ...request, options: { allowBreakoutRooms: false } })).status).toBe(409);
+  expect(mocks.create).toHaveBeenCalledTimes(2);
+});
+it('validates names and options before reserving or sending invitations', async () => {
+  for (const body of [{ ...request, title: '  ' }, { title: 'Title', options: { allowBreakoutRooms: 'yes' } }, { ...request, extra: true }])
+    expect((await post('', body)).status).toBe(400);
+  expect(data.meetings).toEqual([]);
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+it('requires renewed consent before sending invitations that need meeting options', async () => {
+  mocks.status.mockResolvedValue({ configured: true, connected: true, meetingOptionsReady: false });
+  expect((await post('', request)).status).toBe(409);
+  expect(data.meetings).toEqual([]);
+  expect(mocks.create).not.toHaveBeenCalled();
 });

@@ -16,7 +16,7 @@ import { previewClasses, previewManualClass, CSV_HEADERS } from './importClasses
 import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
-import { canManage, classKey, classInputSchema, lessonInputSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { canManage, classKey, classInputSchema, lessonInputSchema, linkSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
 import { EMPTY_CALENDAR, previewSchedule } from '../shared/calendar.js';
 import { createCalendarRouter } from './calendarRoutes.js';
 import { createTeamsRouter } from './teams.js';
@@ -232,6 +232,46 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
   }
   api.post('/lessons', writeLesson);
   api.put('/lessons/:id', writeLesson);
+  const writeLink = async (req: express.Request, res: express.Response) => {
+    const link = linkSchema.parse(req.body);
+    const editing = req.method === 'PUT';
+    if (editing && id(req.params.linkId) !== link.id) throw new HttpError(400, 'The resource ID must match the link being edited.');
+    const lesson = await transaction(async (tx) => {
+      const data = await snapshot(tx);
+      const previous = lessonById(data, id(req.params.id));
+      editable(req.user!, data, previous.classId);
+      if (editing) {
+        if (!previous.links.some((item) => item.id === link.id)) throw new HttpError(404, 'Link not found.');
+      } else if (previous.links.some((item) => item.id === link.id)) {
+        const existing = previous.links.find((item) => item.id === link.id);
+        if (existing?.name !== link.name || existing.url !== link.url || existing.kind !== link.kind)
+          throw new HttpError(409, 'This resource ID is already in use. Reload the lesson.');
+        return previous;
+      }
+      if (!editing && previous.links.length >= 30) throw new HttpError(400, 'A lesson can have at most 30 links.');
+      const result = { ...previous, links: editing ? previous.links.map((item) => item.id === link.id ? link : item) : [...previous.links, link], updatedAt: new Date().toISOString() };
+      await save(tx, 'lesson', result.id, result);
+      return result;
+    });
+    logger.info({ actorId: req.user!.id, lessonId: lesson.id, linkId: link.id }, 'Learning link saved');
+    res.json(lesson);
+  };
+  api.post('/lessons/:id/links', writeLink);
+  api.put('/lessons/:id/links/:linkId', writeLink);
+  api.delete('/lessons/:id/links/:linkId', async (req, res) => {
+    const linkId = id(req.params.linkId);
+    const lesson = await transaction(async (tx) => {
+      const data = await snapshot(tx);
+      const previous = lessonById(data, id(req.params.id));
+      editable(req.user!, data, previous.classId);
+      if (!previous.links.some((item) => item.id === linkId)) throw new HttpError(404, 'Link not found.');
+      const result = { ...previous, links: previous.links.filter((item) => item.id !== linkId), updatedAt: new Date().toISOString() };
+      await save(tx, 'lesson', result.id, result);
+      return result;
+    });
+    logger.info({ actorId: req.user!.id, lessonId: lesson.id, linkId }, 'Learning link removed');
+    res.json(lesson);
+  });
   api.delete('/lessons/:id', async (req, res) => {
     const lessonId = id(req.params.id);
     const files = await transaction(async (tx) => {

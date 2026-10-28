@@ -7,7 +7,8 @@ export function visibleSnapshot(user: User, all: Snapshot): Snapshot {
     slots: all.slots,
     periodTypes: all.periodTypes,
     calendar: all.calendar,
-    meetings: all.meetings?.filter((meeting) => classes.some((c) => all.lessons.some((l) => l.id === meeting.lessonId && l.classId === c.id))),
+    meetings: all.meetings?.filter((meeting) => classes.some((c) => all.lessons.some((l) => l.id === meeting.lessonId && l.classId === c.id)))
+      .map((meeting) => ({ ...meeting, joinUrl: meeting.optionsApplied === false ? null : meeting.joinUrl })),
     classes: classes.map((c) => canManage(user, c) ? c : {
       ...c, students: c.students.filter((s) => mayViewStudent(user, s)),
     }),

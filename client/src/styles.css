@@ -178,6 +178,10 @@ td { padding: 14px 12px; border-bottom: 1px solid var(--border); overflow-wrap: 
 .period-days-options .checkbox { margin: 0; padding: 8px 0; align-items: center; font-size: .82rem; }
 input:disabled, select:disabled { opacity: .7; cursor: not-allowed; }
 .form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 24px 0; }
+.lesson-resource-dialog label { margin-bottom: 16px; }
+.lesson-resource-dialog .checkbox, .lesson-resource-dialog .upload-field { display: flex; align-items: center; }
+.lesson-resource-dialog .file-row { flex-wrap: wrap; overflow-wrap: anywhere; }
+.lesson-resource-dialog .file-row a { min-width: 0; flex: 1 1 180px; }
 .admin-note { display: flex; gap: 15px; align-items: center; padding: 16px 20px; margin-bottom: 24px; }
 .admin-note svg { flex-shrink: 0; }
 .admin-note p { margin: 0; font-size: .83rem; color: var(--text-muted); }

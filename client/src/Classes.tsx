@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { Plus, Upload, Trash2, Users, BookOpen, Pencil } from 'lucide-react';
+import { Plus, Users, BookOpen, Pencil } from 'lucide-react';
 import { DAYS, canManage, lessonInputSchema, type User, type Snapshot, type Lesson, type LearningClass, type LessonInput } from '../../shared/learning';
-import { api, errorMessage, fileBody } from './api';
+import { api, errorMessage } from './api';
 import { Resources } from './Timetable';
 import { LessonSchedule } from './LessonSchedule';
-import { LessonTeams } from './LessonTeams';
+import { LessonResources } from './LessonResources';
 import { schoolDate, EMPTY_CALENDAR, previewSchedule } from '../../shared/calendar';
 
 function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
@@ -19,6 +19,7 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resourceBusy, setResourceBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(''); setNotice('');
     try {
@@ -30,49 +31,16 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
-  async function upload(file: File) {
-    if (!saved) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
-      await api(`/lessons/${saved.id}/files`, 'POST', fileBody(file));
-      const result = await api<Snapshot>('/learning');
-      setSaved(result.lessons.find((l) => l.id === saved.id));
-      await refresh(); setNotice('Resource uploaded.');
-    } catch (error) { setError(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
-  async function removeFile(fileId: string) {
-    if (!saved || !window.confirm('Remove this lesson resource?')) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
-      await api(`/lessons/${saved.id}/files/${fileId}`, 'DELETE');
-      setSaved({ ...saved, files: saved.files.filter((f) => f.id !== fileId) });
-      await refresh(); setNotice('Resource removed.');
-    } catch (error) { setError(errorMessage(error)); }
-    finally { setBusy(false); }
-  }
   return <section className="panel editor" aria-label="Lesson editor">
-    <div className="section-heading"><div><p className="eyebrow">{classroom.name}</p><h2>{saved ? 'Edit lesson' : 'Create a lesson'}</h2></div><button className="btn secondary" disabled={busy} onClick={onClose}>Close editor</button></div>
+    <div className="section-heading"><div><p className="eyebrow">{classroom.name}</p><h2>{saved ? 'Edit lesson' : 'Create a lesson'}</h2></div><button className="btn secondary" disabled={busy || resourceBusy} onClick={onClose}>Close editor</button></div>
     <form onSubmit={(event) => void submit(event)}>
       <label>Lesson name<input required maxLength={200} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
       <label>Description<textarea rows={4} maxLength={10000} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What will students learn? Include instructions and preparation." /></label>
       <LessonSchedule schedule={draft.schedule!} slotIds={draft.slotIds} slots={data.slots} calendar={data.calendar} onChange={(schedule, slotIds) => setDraft({ ...draft, schedule, slotIds })} />
-      <fieldset><legend>External &amp; Microsoft Teams links</legend>
-        {draft.links.map((link, index) => <div key={link.id} className="link-editor">
-          <label>Type<select value={link.kind} onChange={(e) => setDraft({ ...draft, links: draft.links.map((l, i) => i === index ? { ...l, kind: e.target.value === 'teams' ? 'teams' : 'link' } : l) })}><option value="link">External link</option><option value="teams">Microsoft Teams</option></select></label>
-          <label>Resource name<input required maxLength={200} value={link.name} onChange={(e) => setDraft({ ...draft, links: draft.links.map((l, i) => i === index ? { ...l, name: e.target.value } : l) })} /></label>
-          <label>HTTPS URL<input required type="url" maxLength={2000} value={link.url} onChange={(e) => setDraft({ ...draft, links: draft.links.map((l, i) => i === index ? { ...l, url: e.target.value } : l) })} /></label>
-          <button type="button" className="icon-button danger" aria-label={`Remove link ${index + 1}`} onClick={() => setDraft({ ...draft, links: draft.links.filter((_, i) => i !== index) })}><Trash2 size={17} /></button>
-        </div>)}
-        <button type="button" className="btn secondary" disabled={draft.links.length >= 30} onClick={() => setDraft({ ...draft, links: [...draft.links, { id: crypto.randomUUID(), kind: 'link', name: '', url: '' }] })}><Plus size={16} /> Add resource link</button>
-      </fieldset>
-      <button className="btn primary" disabled={busy}>{busy ? 'Saving...' : 'Save lesson'}</button>
+      <button className="btn primary" disabled={busy || resourceBusy}>{busy ? 'Saving...' : 'Save lesson'}</button>
     </form>
-    {saved && <LessonTeams lesson={saved} data={data} user={user} refresh={refresh} />}
-    {saved && <section className="file-editor"><h3>Uploaded resources</h3><p className="muted">Up to 20 files, 25 MB each. PDF, Office, text, images, MP3 or MP4. Images are optimized before saving to private Azure Blob Storage.</p>
-      <label className="upload-field"><Upload size={20} /> Add a resource file<input type="file" disabled={busy} accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.mp3,.mp4" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /></label>
-      {saved.files.map((file) => <div className="file-row" key={file.id}><span>{file.name}</span><button className="text-button danger" disabled={busy} onClick={() => void removeFile(file.id)}>Remove</button></div>)}
-    </section>}
+    <LessonResources lesson={saved} data={data} user={user} disabled={busy} onBusyChange={setResourceBusy} refresh={refresh}
+      onChange={(result) => { setSaved(result); setDraft((current) => ({ ...current, links: result.links })); }} />
     {error && <p role="alert" className="alert error">{error}</p>}
     {notice && <p role="status" className="alert success">{notice}</p>}
   </section>;
@@ -103,7 +71,7 @@ export function Classes({ data, user, refresh }: { data: Snapshot; user: User; r
         <div className="lesson-icon"><BookOpen size={20} /></div><h3>{lesson.name}</h3><p className="description">{lesson.description}</p>
         <div className="schedule-pills">{lesson.slotIds.map((id) => { const s = data.slots.find((s) => s.id === id); return s ? <span className="pill" key={id}>{DAYS[s.day].slice(0, 3)} {s.start}</span> : null; })}</div>
         <p className="small muted">{lesson.schedule ? `${lesson.schedule.frequency}: ${lesson.schedule.startDate} to ${lesson.occurrences?.at(-1)?.date} (${lesson.occurrences?.length ?? 0} period occurrences)` : 'Legacy weekly lesson - replace with a dated schedule.'}</p>
-        <Resources lesson={lesson} /><div className="card-actions"><button className="btn secondary" disabled={busy} onClick={() => setEditor(lesson)}><Pencil size={15} /> Edit</button><button className="text-button danger" disabled={busy} onClick={() => void deleteLesson(lesson)}>Delete lesson</button></div>
+        <Resources lesson={lesson} meetings={data.meetings} /><div className="card-actions"><button className="btn secondary" disabled={busy} onClick={() => setEditor(lesson)}><Pencil size={15} /> Edit</button><button className="text-button danger" disabled={busy} onClick={() => void deleteLesson(lesson)}>Delete lesson</button></div>
       </article>)}</div>
       {!data.lessons.some((l) => l.classId === classroom.id) && <div className="empty panel"><BookOpen size={30} /><h3>A fresh start for this class</h3><p className="muted">Create a lesson, choose weekly periods and add resources.</p></div>}
       <details className="panel roster"><summary>Class roster &middot; {classroom.students.length} {classroom.students.length === 1 ? 'student' : 'students'}</summary><p className="muted">Enrolments are maintained by administrators through class imports.</p><div className="table-scroll"><table><thead><tr><th>Student</th><th>Email</th></tr></thead><tbody>{classroom.students.map((s) => <tr key={s.email}><td>{s.displayName}</td><td>{s.email}</td></tr>)}</tbody></table></div></details>

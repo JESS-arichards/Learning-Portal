@@ -200,11 +200,19 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     expect(data.calendar).toEqual(calendar);
     expect(data.lessons[0].schedule).toEqual(dated.schedule);
     expect(data.lessons[0].occurrences).toEqual(dated.occurrences);
+    run(`ALTER TABLE dbo.LearningLiveMeetings DROP CONSTRAINT CK_LearningLiveMeetings_Options,DF_LearningLiveMeetings_OptionsApplied;
+      ALTER TABLE dbo.LearningLiveMeetings DROP COLUMN Title,Options,OptionsApplied;
+      DELETE dbo.LearningSchemaMigrations WHERE Version=3;`);
     run(`INSERT dbo.LearningLiveMeetings(OccurrenceId,OrganizerUserId,State,EventId,JoinUrl)
       VALUES('${uuid(33)}',12,'created',N'event-one',N'https://teams.microsoft.com/test');`);
+    run(schema);
+    expect((await readSnapshot()).meetings?.[0].optionsApplied).toBe(true);
+    run(`UPDATE dbo.LearningLiveMeetings SET Title=N'Live fractions',Options=N'{"allowBreakoutRooms":true}',OptionsApplied=0;`);
+    run(schema);
     await save(transaction(), 'lesson', dated.id, { ...dated, files: [] });
     data = await readSnapshot();
-    expect(data.meetings?.[0]).toMatchObject({ occurrenceId: uuid(33), state: 'created' });
+    expect(data.meetings?.[0]).toMatchObject({ occurrenceId: uuid(33), state: 'created', title: 'Live fractions',
+      options: { allowBreakoutRooms: true }, optionsApplied: false });
     expect(data.lessons[0].occurrences).toEqual(dated.occurrences);
     expect(run('SELECT COUNT(*) FROM dbo.LearningTeamsConnections;')).toBe('0');
     await expect(saveStructure(transaction(), { slots: [], periodTypes: DEFAULT_PERIOD_TYPES })).rejects.toThrow();

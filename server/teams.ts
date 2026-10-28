@@ -7,7 +7,7 @@ import { config } from './config.js';
 import { requireUser } from './auth.js';
 import { HttpError, logger } from './errors.js';
 import { pool, sql } from './db.js';
-import { emailSchema, normaliseEmail, type User } from '../shared/learning.js';
+import { emailSchema, normaliseEmail, meetingOptionsSchema, type User } from '../shared/learning.js';
 
 /*
   Delegated (per-teacher) Microsoft Graph integration for Teams online lessons.
@@ -20,7 +20,8 @@ type TeamsEnvironment = {
 };
 type TeamsSettings = { tenantId: string; clientId: string; clientSecret: string; tokenKey: Buffer; redirectUri: string };
 
-export const TEAMS_SCOPES = 'openid profile offline_access User.Read Calendars.ReadWrite';
+// OnlineMeetings.ReadWrite (delegated) is the least-privileged permission for PATCH /me/onlineMeetings/{id}.
+export const TEAMS_SCOPES = 'openid profile offline_access User.Read Calendars.ReadWrite OnlineMeetings.ReadWrite';
 export const TEAMS_TIME_ZONE = 'Arabian Standard Time';
 // Exchange Online default per-message recipient limit; meeting invitations are sent as one message.
 export const TEAMS_MAX_ATTENDEES = 500;
@@ -37,6 +38,8 @@ const MAX_RETRY_AFTER_SECONDS = 10;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const opaque = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const reconnectMessage = 'Your Microsoft Teams connection has expired or was revoked. Reconnect Teams from Classes.';
+const consentMessage = 'Microsoft Teams needs your approval to manage online meeting settings (OnlineMeetings.ReadWrite). Reconnect Teams from Classes and approve access. '
+  + 'If Microsoft says administrator approval is required, ask your Microsoft 365 administrator to grant the Learning Portal app the delegated OnlineMeetings.ReadWrite permission.';
 
 function settings(): TeamsSettings | undefined {
   const env = config as typeof config & TeamsEnvironment;
@@ -63,6 +66,8 @@ function requireSettings(): TeamsSettings {
 const storedSchema = z.object({
   v: z.literal(1), tenantId: z.string(), clientId: z.string(), graphUserId: z.string().min(1), account: z.string().min(1),
   accessToken: z.string().min(1), refreshToken: z.string().min(1), expiresAt: z.number().int(),
+  // Scopes Microsoft reported as granted; absent for connections stored before scopes were recorded.
+  scope: z.string().max(4000).optional(),
 }).strict();
 type StoredConnection = z.infer<typeof storedSchema>;
 const aad = (userId: number) => Buffer.from(`learning-teams:v1:${userId}`);
@@ -218,6 +223,10 @@ async function tokenRequest(s: TeamsSettings, grant: Record<string, string>, pur
     logger.warn({ purpose, status: response.status, error: code, errorCodes: failure.success ? failure.data.error_codes : undefined,
       correlationId: failure.success ? failure.data.correlation_id : undefined }, 'Microsoft token request rejected');
     if (response.status >= 500) throw new HttpError(503, 'Microsoft sign-in is unavailable. Please try again shortly.');
+    // AADSTS65001: the user or an administrator has not consented to a requested scope (e.g. a newly added one).
+    if (code === 'consent_required' || code === 'interaction_required' || (failure.success && failure.data.error_codes?.includes(65001))) {
+      throw new HttpError(purpose === 'refresh' ? 409 : 403, consentMessage);
+    }
     if (code === 'invalid_grant') {
       throw new HttpError(purpose === 'refresh' ? 409 : 400, purpose === 'refresh' ? reconnectMessage
         : 'The Microsoft authorization expired or was already used. Connect Teams again.');
@@ -253,9 +262,16 @@ function idTokenClaims(s: TeamsSettings, idToken: string | undefined) {
 function hasCalendarScope(scope: string | undefined) {
   return (scope ?? '').split(/\s+/).some((s) => /(^|\/)calendars\.readwrite$/i.test(s));
 }
+function hasOnlineMeetingScope(scope: string | undefined) {
+  return (scope ?? '').split(/\s+/).some((s) => /(^|\/)onlinemeetings\.readwrite$/i.test(s));
+}
 
 // ---------- Microsoft Graph (delegated only) ----------
-type GraphOptions = { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number; ambiguousOnFailure?: string; headers?: Record<string, string> };
+type GraphOptions = {
+  method?: 'GET' | 'POST' | 'PATCH'; body?: unknown; timeoutMs?: number; ambiguousOnFailure?: string; headers?: Record<string, string>;
+  /** Overrides for the calendar-oriented default error messages. */
+  messages?: { forbidden?: string; notFound?: string; rejected?: string };
+};
 const graphErrorSchema = z.object({ error: z.object({ code: z.string().max(100).catch('unknown') }) });
 export class GraphError extends HttpError {
   constructor(status: number, message: string, public graphStatus: number, public graphCode: string) { super(status, message); }
@@ -279,7 +295,8 @@ async function graph(accessToken: string, path: string, options: GraphOptions = 
     }
     const requestId = response.headers.get('request-id') ?? undefined;
     // 429 means Graph did not process the request, so a bounded replay is safe (event creation also carries transactionId).
-    const retryable = response.status === 429 || response.status === 503 && method === 'GET';
+    // GET and PATCH (setting fixed property values) are idempotent, so a 503 may also be replayed for them.
+    const retryable = response.status === 429 || response.status === 503 && (method === 'GET' || method === 'PATCH');
     if (retryable) {
       const header = response.headers.get('retry-after');
       const seconds = header && /^\d+$/.test(header) ? Number(header) : 2;
@@ -297,13 +314,13 @@ async function graph(accessToken: string, path: string, options: GraphOptions = 
     const code = failure.success ? failure.data.error.code : 'unknown';
     logger.warn({ method, status: response.status, code, requestId }, 'Microsoft Graph request rejected');
     if (response.status === 401) throw new GraphError(409, reconnectMessage, 401, code);
-    if (response.status === 403) throw new GraphError(403, 'Microsoft denied calendar access for this account. Reconnect Teams and approve calendar access.', 403, code);
-    if (response.status === 404) throw new GraphError(404, 'The Microsoft calendar item was not found.', 404, code);
+    if (response.status === 403) throw new GraphError(403, options.messages?.forbidden ?? 'Microsoft denied calendar access for this account. Reconnect Teams and approve calendar access.', 403, code);
+    if (response.status === 404) throw new GraphError(404, options.messages?.notFound ?? 'The Microsoft calendar item was not found.', 404, code);
     if (response.status >= 500) {
       if (options.ambiguousOnFailure) throw new GraphError(504, options.ambiguousOnFailure, response.status, code);
       throw new GraphError(503, 'Microsoft Teams is unavailable. Please try again shortly.', response.status, code);
     }
-    throw new GraphError(502, `Microsoft rejected the calendar request (${code}). Contact support if this continues.`, response.status, code);
+    throw new GraphError(502, `${options.messages?.rejected ?? 'Microsoft rejected the calendar request'} (${code}). Contact support if this continues.`, response.status, code);
   }
 }
 
@@ -336,7 +353,7 @@ async function accessTokenFor(user: User, s: TeamsSettings): Promise<StoredConne
       }
       const next: StoredConnection = {
         ...stored, accessToken: tokens.access_token, refreshToken: tokens.refresh_token ?? stored.refreshToken,
-        expiresAt: Date.now() + tokens.expires_in * 1000,
+        expiresAt: Date.now() + tokens.expires_in * 1000, scope: tokens.scope ?? stored.scope,
       };
       await replacePayload(tx, user.id, payload, encryptConnection(s.tokenKey, user.id, next));
       return { ok: next };
@@ -353,15 +370,21 @@ function usableConnection(user: User, s: TeamsSettings, payload: string): Stored
 }
 
 // ---------- Public API ----------
-export type TeamsStatus = { configured: boolean; connected: boolean; account?: string; reconnectRequired?: boolean };
+/** meetingOptionsReady: the stored connection was granted OnlineMeetings.ReadWrite, so applyTeamsMeetingOptions can run. */
+export type TeamsStatus = { configured: boolean; connected: boolean; meetingOptionsReady: boolean; account?: string; reconnectRequired?: boolean };
+/** Teams meeting options applied after the calendar event exists (see applyTeamsMeetingOptions). */
+export type TeamsMeetingOptions = z.infer<typeof meetingOptionsSchema>;
 export type TeamsEventInput = {
   transactionId: string; subject: string; description: string; date: string; start: string; end: string;
   attendees: { email: string; displayName: string }[];
+  /** Validated and returned by validateTeamsEventInput, but never sent with the calendar event. */
+  options?: TeamsMeetingOptions;
 };
 export type TeamsEventResult = { eventId: string; joinUrl: string; organizerId?: string };
 export type TeamsCancelResult = { status: 'cancelled' | 'alreadyGone' };
 
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm.');
+export const teamsMeetingOptionsSchema = meetingOptionsSchema;
 export const teamsEventInputSchema = z.object({
   transactionId: z.string().regex(/^[A-Za-z0-9._:-]{8,200}$/, 'Use a stable 8-200 character transaction ID.'),
   subject: z.string().trim().min(1).max(255, 'Subject must be at most 255 characters.'),
@@ -372,6 +395,7 @@ export const teamsEventInputSchema = z.object({
   }, 'Use a real YYYY-MM-DD date.'),
   start: time, end: time,
   attendees: z.array(z.object({ email: emailSchema, displayName: z.string().trim().min(1).max(200) }).strict()).max(5000, 'A lesson cannot include more than 5000 attendee entries.'),
+  options: teamsMeetingOptionsSchema.optional(),
 }).strict().refine((v) => v.end > v.start, { message: 'The lesson must end after it starts.', path: ['end'] });
 const eventIdSchema = z.string().regex(/^[A-Za-z0-9+/=_-]{1,1024}$/, 'Invalid Microsoft event ID.');
 const createdEventSchema = z.object({
@@ -387,12 +411,12 @@ export function isTeamsJoinUrl(value: string): boolean {
 
 export async function teamsStatus(user: User): Promise<TeamsStatus> {
   const s = settings();
-  if (!s) return { configured: false, connected: false };
+  if (!s) return { configured: false, connected: false, meetingOptionsReady: false };
   const payload = await readPayload(user.id);
-  if (!payload) return { configured: true, connected: false };
+  if (!payload) return { configured: true, connected: false, meetingOptionsReady: false };
   const stored = usableConnection(user, s, payload);
-  if (!stored) return { configured: true, connected: false, reconnectRequired: true };
-  return { configured: true, connected: true, account: stored.account };
+  if (!stored) return { configured: true, connected: false, meetingOptionsReady: false, reconnectRequired: true };
+  return { configured: true, connected: true, meetingOptionsReady: hasOnlineMeetingScope(stored.scope), account: stored.account };
 }
 
 /**
@@ -472,6 +496,93 @@ export async function cancelTeamsEvent(user: User, eventId: string): Promise<Tea
   return { status: 'cancelled' };
 }
 
+// ---------- Teams meeting options ----------
+const MAX_JOIN_URL_LENGTH = 2048;
+const meetingIdSchema = z.string().regex(/^[A-Za-z0-9+/=_-]{1,2048}$/);
+const onlineMeetingSchema = z.object({
+  id: z.string(), joinWebUrl: z.string().nullable().optional(), allowBreakoutRooms: z.boolean().nullable().optional(),
+});
+const onlineMeetingListSchema = z.object({ value: z.array(z.unknown()) });
+const optionsGraphMessages = {
+  forbidden: `Microsoft denied changing Teams meeting options for this account. ${consentMessage}`,
+  notFound: 'Microsoft could not find this Teams meeting in the connected organizer\'s account.',
+  rejected: 'Microsoft rejected the Teams meeting options request',
+};
+function sameJoinUrl(expected: string, actual: string | null | undefined): boolean {
+  return typeof actual === 'string' && isTeamsJoinUrl(actual) && new URL(actual).href === new URL(expected).href;
+}
+
+/**
+ * Applies Teams meeting options to the online meeting behind an already-created calendar event, using the
+ * documented delegated Graph v1.0 APIs: GET /me/onlineMeetings?$filter=JoinWebUrl eq '{joinWebUrl}' and
+ * PATCH /me/onlineMeetings/{id} with { allowBreakoutRooms } (OnlineMeetings.ReadWrite). Only enables or
+ * disables breakout rooms; it never creates or assigns rooms. Safe to repeat. Resolves only once Microsoft
+ * confirms the requested value; every other outcome throws an explicit HttpError.
+ */
+export async function applyTeamsMeetingOptions(user: User, joinUrl: string, options: TeamsMeetingOptions): Promise<void> {
+  const parsed = teamsMeetingOptionsSchema.safeParse(options);
+  if (!parsed.success) {
+    throw new HttpError(400, `Invalid Teams meeting options: ${parsed.error.issues.map((i) => `(${i.path.join('.') || 'options'}) ${i.message}`).join('; ')}`);
+  }
+  if (typeof joinUrl !== 'string' || joinUrl.length > MAX_JOIN_URL_LENGTH || !isTeamsJoinUrl(joinUrl)) {
+    throw new HttpError(400, 'A valid Microsoft Teams join link is required to apply meeting options.');
+  }
+  const { allowBreakoutRooms } = parsed.data;
+  const s = requireSettings();
+  // Staff role only: this acts solely on the caller's own meeting, like cancellation.
+  if (!isStaff(user)) throw new HttpError(403, 'Only teaching staff can change Microsoft Teams meeting options.');
+  const connection = await accessTokenFor(user, s);
+  if (!hasOnlineMeetingScope(connection.scope)) throw new HttpError(409, consentMessage);
+  const unconfirmed = 'Microsoft Teams did not confirm the meeting options. The lesson invitation already exists; retry applying the options (it is safe to repeat) instead of creating the lesson again.';
+  const token = connection.accessToken;
+
+  const filter = `JoinWebUrl eq '${joinUrl.replace(/'/g, "''")}'`;
+  const lookup = onlineMeetingListSchema.safeParse((await graph(token, `/me/onlineMeetings?$filter=${encodeURIComponent(filter)}`, { messages: optionsGraphMessages })).data);
+  if (!lookup.success) {
+    logger.error({ userId: user.id }, 'Microsoft Graph returned an invalid online meeting lookup');
+    throw new HttpError(502, unconfirmed);
+  }
+  if (lookup.data.value.length === 0) {
+    throw new HttpError(404, 'Microsoft could not find a Teams meeting for this join link in the connected organizer\'s account, so its options were not changed.');
+  }
+  if (lookup.data.value.length > 1) {
+    logger.error({ userId: user.id, matches: lookup.data.value.length }, 'Microsoft Graph returned several online meetings for one join URL');
+    throw new HttpError(502, 'Microsoft returned more than one Teams meeting for this join link, so its options were not changed. Contact support.');
+  }
+  const found = onlineMeetingSchema.safeParse(lookup.data.value[0]);
+  const id = found.success ? meetingIdSchema.safeParse(found.data.id) : undefined;
+  if (!found.success || !id?.success || !sameJoinUrl(joinUrl, found.data.joinWebUrl)) {
+    logger.error({ userId: user.id }, 'Microsoft Graph returned an online meeting that does not match the join URL');
+    throw new HttpError(502, 'Microsoft returned a Teams meeting that does not match this join link, so its options were not changed. Contact support.');
+  }
+  const meetingPath = `/me/onlineMeetings/${encodeURIComponent(id.data)}`;
+
+  const { data } = await graph(token, meetingPath, {
+    method: 'PATCH', body: { allowBreakoutRooms }, ambiguousOnFailure: unconfirmed, messages: optionsGraphMessages,
+  });
+  const updated = onlineMeetingSchema.safeParse(data);
+  if (!updated.success || updated.data.id !== id.data
+    || (updated.data.joinWebUrl != null && !sameJoinUrl(joinUrl, updated.data.joinWebUrl))) {
+    logger.error({ userId: user.id }, 'Microsoft Graph returned an invalid updated online meeting');
+    throw new HttpError(502, unconfirmed);
+  }
+  let applied = updated.data.allowBreakoutRooms;
+  if (applied == null) {
+    // The update response omitted the property, so read the meeting back rather than assume success.
+    const reread = onlineMeetingSchema.safeParse((await graph(token, meetingPath, { messages: optionsGraphMessages })).data);
+    applied = reread.success && reread.data.id === id.data ? reread.data.allowBreakoutRooms : undefined;
+    if (applied == null) {
+      logger.error({ userId: user.id }, 'Microsoft Graph did not report allowBreakoutRooms after update');
+      throw new HttpError(502, unconfirmed);
+    }
+  }
+  if (applied !== allowBreakoutRooms) {
+    logger.warn({ userId: user.id, requested: allowBreakoutRooms }, 'Microsoft Graph did not apply allowBreakoutRooms');
+    throw new HttpError(502, `Microsoft Teams did not ${allowBreakoutRooms ? 'enable' : 'disable'} breakout rooms for this meeting. Your organisation's Teams policy may not allow it; contact your Microsoft 365 administrator.`);
+  }
+  logger.info({ userId: user.id, allowBreakoutRooms }, 'Teams meeting options applied');
+}
+
 // ---------- OAuth routes ----------
 const flowKey = () => new TextEncoder().encode(config.SESSION_SECRET);
 const flowCookieOptions = () => ({ httpOnly: true, secure: config.production, sameSite: 'lax' as const, path: '/api/teams' });
@@ -549,7 +660,7 @@ export function createTeamsRouter() {
       const code = /^[a-z_]{1,64}$/.test(query.data.error) ? query.data.error : 'unknown';
       logger.warn({ userId: user.id, error: code }, 'Microsoft authorization returned an error');
       throw new HttpError(400, code === 'access_denied' || code === 'consent_required'
-        ? 'Microsoft Teams calendar access was not granted. Connect Teams again and approve access.'
+        ? `Microsoft Teams calendar and online meeting access was not granted. Connect Teams again and approve access. If Microsoft says administrator approval is required, ask your Microsoft 365 administrator to grant the Learning Portal app the delegated Calendars.ReadWrite and OnlineMeetings.ReadWrite permissions.`
         : 'Microsoft sign-in did not complete. Connect Teams again from Classes.');
     }
     if (!query.data.code) throw new HttpError(400, 'Microsoft did not return an authorization code. Connect Teams again from Classes.');
@@ -577,6 +688,7 @@ export function createTeamsRouter() {
     const stored: StoredConnection = {
       v: 1, tenantId: s.tenantId, clientId: s.clientId, graphUserId: me.data.id, account: normaliseEmail(me.data.userPrincipalName),
       accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt: Date.now() + tokens.expires_in * 1000,
+      ...(tokens.scope ? { scope: tokens.scope } : {}),
     };
     await withUserLock(user.id, () => withSqlLocks([CONNECT_LOCK, userLock(user.id)], async (tx) => {
       const others = await tx.request().input('userId', sql.Int, user.id)

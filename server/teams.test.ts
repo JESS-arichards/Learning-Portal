@@ -75,7 +75,8 @@ vi.mock('./db.js', () => {
   return { pool, sql: { Int: 'int', NVarChar: () => 'nvarchar', MAX: -1, Transaction, ISOLATION_LEVEL: { READ_COMMITTED: 1 } } };
 });import { HttpError, logger } from './errors.js';
 import {
-  cancelTeamsEvent, createTeamsEvent, createTeamsRouter, decryptConnection, encryptConnection, teamsStatus, validateTeamsEventInput, type TeamsEventInput,
+  applyTeamsMeetingOptions, cancelTeamsEvent, createTeamsEvent, createTeamsRouter, decryptConnection, encryptConnection, teamsStatus, validateTeamsEventInput,
+  TEAMS_SCOPES, type TeamsEventInput, type TeamsMeetingOptions,
 } from './teams.js';
 
 const realFetch = globalThis.fetch;
@@ -161,7 +162,7 @@ function microsoftSucceeds(nonce: string, me: Record<string, unknown> = { id: 'o
 describe('Teams configuration and status', () => {
   it('reports unconfigured without any database or network call', async () => {
     for (const k of ['ENTRA_TENANT_ID', 'ENTRA_CLIENT_ID', 'ENTRA_CLIENT_SECRET', 'TEAMS_TOKEN_KEY']) delete mocks.config[k];
-    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false });
+    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false, meetingOptionsReady: false });
     expect(mocks.queries).toEqual([]);
     expect(graphFetch).not.toHaveBeenCalled();
     await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 503 });
@@ -176,7 +177,7 @@ describe('Teams configuration and status', () => {
   });
   it('leaves Teams disabled when existing Entra credentials have no token key', async () => {
     delete mocks.config.TEAMS_TOKEN_KEY;
-    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false });
+    expect(await teamsStatus(teacher)).toEqual({ configured: false, connected: false, meetingOptionsReady: false });
     expect(mocks.queries).toEqual([]);
     expect(graphFetch).not.toHaveBeenCalled();
   });
@@ -185,18 +186,40 @@ describe('Teams configuration and status', () => {
     expect(graphFetch).not.toHaveBeenCalled();
   });
   it('reports connection state and never exposes tokens', async () => {
-    expect(await (await get('/api/teams/status', teacher.id)).json()).toEqual({ configured: true, connected: false });
+    expect(await (await get('/api/teams/status', teacher.id)).json()).toEqual({ configured: true, connected: false, meetingOptionsReady: false });
     seed(teacher);
     const body = await (await get('/api/teams/status', teacher.id)).text();
-    expect(JSON.parse(body)).toEqual({ configured: true, connected: true, account: 'teacher@school.test' });
+    expect(JSON.parse(body)).toEqual({ configured: true, connected: true, meetingOptionsReady: false, account: 'teacher@school.test' });
     expect(body).not.toContain('access-5');
     expect(graphFetch).not.toHaveBeenCalled();
   });
   it('requires reconnection when the stored account no longer matches or cannot be decrypted', async () => {
-    seed(teacher, { account: 'old@school.test' });
-    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, reconnectRequired: true });
+    seed(teacher, { account: 'old@school.test', scope: TEAMS_SCOPES });
+    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, meetingOptionsReady: false, reconnectRequired: true });
     mocks.store.set(teacher.id, mocks.store.get(other.id) ?? 'v1.bad.bad.bad');
-    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, reconnectRequired: true });
+    expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: false, meetingOptionsReady: false, reconnectRequired: true });
+  });
+  it('reports meeting options ready only when the stored grant includes OnlineMeetings.ReadWrite', async () => {
+    const cases: [string | undefined, boolean][] = [
+      [undefined, false], ['openid profile offline_access User.Read Calendars.ReadWrite', false], ['OnlineMeetings.Read Calendars.ReadWrite', false],
+      [TEAMS_SCOPES, true], ['https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/OnlineMeetings.ReadWrite', true],
+    ];
+    for (const [scope, ready] of cases) {
+      seed(teacher, scope === undefined ? {} : { scope });
+      expect(await teamsStatus(teacher)).toEqual({ configured: true, connected: true, meetingOptionsReady: ready, account: 'teacher@school.test' });
+      expect(await (await get('/api/teams/status', teacher.id)).json()).toMatchObject({ connected: true, meetingOptionsReady: ready });
+    }
+    expect(graphFetch).not.toHaveBeenCalled();
+  });
+  it('becomes ready after reconnecting with the online meetings grant', async () => {
+    const flow = await connect();
+    microsoftSucceeds(flow.nonce);
+    graphFetch.mockImplementationOnce(async () => json(200, {
+      token_type: 'Bearer', access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600, scope: TEAMS_SCOPES,
+      id_token: idToken({ tid: TENANT, oid: 'oid-5', aud: CLIENT, iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, nonce: flow.nonce }),
+    }));
+    expect((await get(`/api/teams/callback?code=abc&state=${flow.state}`, teacher.id, flow.cookie)).status).toBe(302);
+    expect(await teamsStatus(teacher)).toMatchObject({ connected: true, meetingOptionsReady: true });
   });
 });
 
@@ -227,7 +250,7 @@ describe('Teams OAuth connect flow', () => {
     expect(location.origin + location.pathname).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
     expect(Object.fromEntries(location.searchParams)).toMatchObject({
       client_id: CLIENT, response_type: 'code', redirect_uri: 'https://learn.school.test/api/teams/callback',
-      scope: 'openid profile offline_access User.Read Calendars.ReadWrite', code_challenge_method: 'S256', login_hint: teacher.email,
+      scope: 'openid profile offline_access User.Read Calendars.ReadWrite OnlineMeetings.ReadWrite', code_challenge_method: 'S256', login_hint: teacher.email,
     });
     expect(location.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const setCookie = response.headers.get('set-cookie')!;
@@ -249,7 +272,8 @@ describe('Teams OAuth connect flow', () => {
     expect(graphFetch.mock.calls[1][0]).toBe('https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName,userType');
     const stored = mocks.store.get(teacher.id)!;
     expect(stored).not.toContain('secret-');
-    expect(decryptConnection(key, teacher.id, stored)).toMatchObject({ accessToken: 'secret-access', refreshToken: 'secret-refresh', graphUserId: 'oid-5', account: 'teacher@school.test' });
+    expect(decryptConnection(key, teacher.id, stored)).toMatchObject({ accessToken: 'secret-access', refreshToken: 'secret-refresh', graphUserId: 'oid-5', account: 'teacher@school.test',
+      scope: 'openid profile offline_access User.Read Calendars.ReadWrite' });
     expect(response.headers.getSetCookie().some((c) => c.startsWith('learning_teams_flow=;'))).toBe(true);
   });
   it('rejects a Microsoft account that does not match the Learning user', async () => {
@@ -338,6 +362,21 @@ describe('Teams events', () => {
       ],
       isOnlineMeeting: true, onlineMeetingProvider: 'teamsForBusiness', allowNewTimeProposals: false, transactionId: 'occ-1111-2222',
     });
+  });
+  it('accepts validated meeting options but never sends them with the calendar event', async () => {
+    graphFetch.mockResolvedValue(json(201, created));
+    expect(validateTeamsEventInput(teacher, { ...input, options: { allowBreakoutRooms: true } }).options).toEqual({ allowBreakoutRooms: true });
+    await expect(createTeamsEvent(teacher, { ...input, options: { allowBreakoutRooms: true } })).resolves.toMatchObject({ eventId: 'AAMkEvent=' });
+    expect(graphFetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(graphFetch.mock.calls[0][1].body));
+    expect(body).not.toHaveProperty('options');
+    expect(body).not.toHaveProperty('allowBreakoutRooms');
+    graphFetch.mockReset();
+    for (const options of [{ allowBreakoutRooms: 'yes' }, { allowBreakoutRooms: true, rooms: 3 }, {}, null]) {
+      expect(() => validateTeamsEventInput(teacher, { ...input, options } as unknown as TeamsEventInput)).toThrow(HttpError);
+      await expect(createTeamsEvent(teacher, { ...input, options } as unknown as TeamsEventInput)).rejects.toMatchObject({ status: 400 });
+    }
+    expect(graphFetch).not.toHaveBeenCalled();
   });
   it('rejects arbitrary organizers and invalid input', async () => {
     await expect(createTeamsEvent(teacher, { ...input, organizer: 'x@y.z' } as TeamsEventInput)).rejects.toThrow();
@@ -499,6 +538,22 @@ describe('Token refresh', () => {
     await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 409 });
     expect(mocks.store.has(teacher.id)).toBe(false);
   });
+  it('explains missing consent for the new scope on refresh and requires reconnect', async () => {
+    seed(teacher, { expiresAt: Date.now() - 1000 });
+    graphFetch.mockResolvedValue(json(400, { error: 'invalid_grant', error_codes: [65001], error_description: 'AADSTS65001 consent' }));
+    const error = await createTeamsEvent(teacher, input).catch((e: unknown) => e);
+    expect(error).toMatchObject({ status: 409, message: expect.stringMatching(/OnlineMeetings\.ReadWrite.*Reconnect Teams.*administrator/) });
+    expect((error as Error).message).not.toContain('AADSTS');
+    expect(mocks.store.has(teacher.id)).toBe(false);
+  });
+  it('records the granted scope when refreshing tokens', async () => {
+    seed(teacher, { expiresAt: Date.now() - 1000 });
+    graphFetch.mockResolvedValueOnce(json(200, { token_type: 'Bearer', access_token: 'a2', refresh_token: 'r2', expires_in: 3600, scope: TEAMS_SCOPES }))
+      .mockResolvedValueOnce(json(201, created));
+    await createTeamsEvent(teacher, input);
+    expect(new URLSearchParams(String(graphFetch.mock.calls[0][1].body)).get('scope')).toBe(TEAMS_SCOPES);
+    expect(decryptConnection(key, teacher.id, mocks.store.get(teacher.id)!)!.scope).toBe(TEAMS_SCOPES);
+  });
   it('never logs tokens or secrets', async () => {
     const spies = (['info', 'warn', 'error'] as const).map((level) => vi.spyOn(logger, level));
     seed(teacher, { expiresAt: Date.now() - 1000 });
@@ -506,5 +561,114 @@ describe('Token refresh', () => {
     await expect(createTeamsEvent(teacher, input)).rejects.toMatchObject({ status: 504 });
     const logged = JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
     for (const secret of ['access-5', 'refresh-5', 'new-access-1', 'new-refresh-1', 'secret-value', KEY]) expect(logged).not.toContain(secret);
+  });
+});
+describe('Teams meeting options', () => {
+  const joinUrl = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABC%40thread.v2/0?context=%7b%22Tid%22%3a%22t%22%7d&x='q'";
+  const meetingId = 'MSpkYzE3Njc0Yy04MWQ5LTRhZGItYmZi_-=';
+  const meeting = (overrides: Record<string, unknown> = {}) => ({ id: meetingId, joinWebUrl: joinUrl, subject: 'Maths 7A', allowBreakoutRooms: false, ...overrides });
+  const lookupUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings?$filter=${encodeURIComponent(`JoinWebUrl eq '${joinUrl.replace(/'/g, "''")}'`)}`;
+  const meetingUrl = `https://graph.microsoft.com/v1.0/me/onlineMeetings/${encodeURIComponent(meetingId)}`;
+  const on: TeamsMeetingOptions = { allowBreakoutRooms: true };
+  beforeEach(() => seed(teacher, { scope: TEAMS_SCOPES }));
+
+  it('looks up the meeting by escaped join URL and PATCHes only allowBreakoutRooms', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: true })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).resolves.toBeUndefined();
+    expect(graphFetch).toHaveBeenCalledTimes(2);
+    const [getHref, getInit] = graphFetch.mock.calls[0];
+    expect(getHref).toBe(lookupUrl);
+    expect(getHref).toContain("$filter=JoinWebUrl%20eq%20'https%3A%2F%2Fteams.microsoft.com%2Fl%2Fmeetup-join%2F19%253ameeting_ABC%2540thread.v2");
+    expect(getHref).toContain("x%3D''q'''");
+    expect(getInit.method).toBe('GET');
+    const [patchHref, patchInit] = graphFetch.mock.calls[1];
+    expect(patchHref).toBe(meetingUrl);
+    expect(patchInit.method).toBe('PATCH');
+    expect((patchInit.headers as Record<string, string>).Authorization).toBe('Bearer access-5');
+    expect((patchInit.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(JSON.parse(String(patchInit.body))).toEqual({ allowBreakoutRooms: true });
+  });
+  it('disables breakout rooms with an explicit false', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ allowBreakoutRooms: true })] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: false })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, { allowBreakoutRooms: false })).resolves.toBeUndefined();
+    expect(JSON.parse(String(graphFetch.mock.calls[1][1].body))).toEqual({ allowBreakoutRooms: false });
+  });
+  it('reads the meeting back when the update response omits the value, and never assumes success', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, { id: meetingId }))
+      .mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: true })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).resolves.toBeUndefined();
+    expect(graphFetch.mock.calls[2][0]).toBe(meetingUrl);
+    expect(graphFetch.mock.calls[2][1].method).toBe('GET');
+    graphFetch.mockReset();
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, { id: meetingId }))
+      .mockResolvedValueOnce(json(200, { id: meetingId }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/did not confirm/) });
+  });
+  it('fails explicitly when Microsoft does not apply the requested value', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ allowBreakoutRooms: false })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/did not enable breakout rooms/) });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ id: 'other', allowBreakoutRooms: true })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(200, meeting({ joinWebUrl: 'https://teams.microsoft.com/l/other', allowBreakoutRooms: true })));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
+  });
+  it('rejects zero, multiple or mismatched lookup results without patching', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [] }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 404, message: expect.stringMatching(/not changed/) });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting(), meeting({ id: 'second' })] }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/more than one/) });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ joinWebUrl: 'https://teams.microsoft.com/l/meetup-join/other' })] }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/does not match/) });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ id: '../../me' })] }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting({ joinWebUrl: null })] }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
+    graphFetch.mockResolvedValueOnce(json(200, { unexpected: true }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502 });
+    expect(graphFetch.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
+  });
+  it('requires the OnlineMeetings.ReadWrite scope before any Microsoft call', async () => {
+    for (const scope of [undefined, 'openid profile offline_access User.Read Calendars.ReadWrite']) {
+      seed(teacher, scope === undefined ? {} : { scope });
+      const error = await applyTeamsMeetingOptions(teacher, joinUrl, on).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HttpError);
+      expect(error).toMatchObject({ status: 409, message: expect.stringMatching(/OnlineMeetings\.ReadWrite.*Reconnect Teams.*administrator/) });
+    }
+    expect(graphFetch).not.toHaveBeenCalled();
+  });
+  it('maps Graph permission refusals to reconnect/admin guidance and never reports success', async () => {
+    graphFetch.mockResolvedValueOnce(json(403, { error: { code: 'Forbidden' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/Reconnect Teams.*administrator/) });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(403, { error: { code: 'Forbidden' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 403 });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(400, { error: { code: 'BadRequest' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/meeting options request \(BadRequest\)/) });
+    graphFetch.mockResolvedValueOnce(json(401, { error: { code: 'InvalidAuthenticationToken' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 409 });
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockResolvedValueOnce(json(404, { error: { code: 'NotFound' } }));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 404 });
+  });
+  it('reports an ambiguous PATCH as unconfirmed and safe to retry, without replaying it', async () => {
+    graphFetch.mockResolvedValueOnce(json(200, { value: [meeting()] })).mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
+    await expect(applyTeamsMeetingOptions(teacher, joinUrl, on)).rejects.toMatchObject({ status: 504, message: expect.stringMatching(/did not confirm.*safe to repeat/) });
+    expect(graphFetch).toHaveBeenCalledTimes(2);
+  });
+  it('validates input before any SQL, token or network access', async () => {
+    mocks.queries.length = 0;
+    const bad: [string, unknown][] = [
+      ['https://evil.example/l/meetup-join/x', on], ['http://teams.microsoft.com/l/meetup-join/x', on], ['not a url', on],
+      [`https://teams.microsoft.com/${'x'.repeat(2100)}`, on], [joinUrl, { allowBreakoutRooms: 'true' }], [joinUrl, {}],
+      [joinUrl, { allowBreakoutRooms: true, breakoutRooms: [{ name: 'A' }] }], [joinUrl, null],
+    ];
+    for (const [link, options] of bad) {
+      await expect(applyTeamsMeetingOptions(teacher, link, options as TeamsMeetingOptions)).rejects.toMatchObject({ status: 400 });
+    }
+    expect(mocks.queries).toEqual([]);
+    expect(graphFetch).not.toHaveBeenCalled();
+  });
+  it('only lets staff apply options to their own connected meeting', async () => {
+    await expect(applyTeamsMeetingOptions(student, joinUrl, on)).rejects.toMatchObject({ status: 403 });
+    await expect(applyTeamsMeetingOptions(other, joinUrl, on)).rejects.toMatchObject({ status: 409 });
+    expect(graphFetch).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
-import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass } from '../../shared/learning';
+import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
 import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday } from '../../shared/calendar';
 
 const schoolClock = new Intl.DateTimeFormat('en-GB', {
@@ -17,7 +17,7 @@ function schoolTime() {
   };
 }
 
-export function Resources({ lesson }: { lesson: Lesson }) {
+export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?: LiveMeeting[] }) {
   return (
     <div className="resource-list">
       {lesson.links.map((link) => <a key={link.id} className={`resource ${link.kind}`} href={link.url} target="_blank" rel="noopener noreferrer">
@@ -26,10 +26,16 @@ export function Resources({ lesson }: { lesson: Lesson }) {
       {lesson.files.map((file) => <a key={file.id} className="resource" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
         <FileDown size={16} /><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small>
       </a>)}
+      {meetings.filter((meeting) => meeting.lessonId === lesson.id && meeting.state === 'created' && meeting.optionsApplied !== false && meeting.joinUrl).map((meeting) => {
+        const occurrence = lesson.occurrences?.find((item) => item.id === meeting.occurrenceId);
+        return <a key={meeting.occurrenceId} className="resource teams" href={meeting.joinUrl!} target="_blank" rel="noopener noreferrer">
+          <ExternalLink size={16} /><span>{meeting.title ?? lesson.name}</span><small>{occurrence?.date.split('-').reverse().join('/')} &middot; Join Teams</small>
+        </a>;
+      })}
     </div>
   );
 }
-function LessonCard({ lesson, classroom, joinUrl }: { lesson: Lesson; classroom: LearningClass; joinUrl?: string | null }) {
+function LessonCard({ lesson, classroom, meeting }: { lesson: Lesson; classroom: LearningClass; meeting?: LiveMeeting }) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const hasDetails = Boolean(lesson.description || lesson.files.length || lesson.links.length);
@@ -38,7 +44,7 @@ function LessonCard({ lesson, classroom, joinUrl }: { lesson: Lesson; classroom:
     <div className="lesson-card-body">
       <p className="eyebrow">{classroom.name}</p><h3>{lesson.name}</h3>
       <p className="teacher">{classroom.teachers.map((t) => t.displayName).join(', ')}</p>
-      {joinUrl && <a className="btn primary" href={joinUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} /> Join live lesson</a>}
+      {meeting?.joinUrl && meeting.optionsApplied !== false && <a className="btn primary" href={meeting.joinUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} /> {meeting.title ?? 'Join live lesson'}</a>}
       {hasDetails && <button className="text-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={detailId}>
         {expanded ? 'Hide lesson details' : `View lesson${lesson.files.length + lesson.links.length ? ` & ${lesson.files.length + lesson.links.length} resources` : ''}`}
       </button>}
@@ -131,7 +137,7 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
                   : scheduled.length ? scheduled.map((lesson) => {
                     const occurrence = lesson.occurrences?.find((item) => item.date === date && item.slotId === slot.id);
                     const meeting = data.meetings?.find((item) => item.occurrenceId === occurrence?.id && item.state === 'created');
-                    return <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} joinUrl={meeting?.joinUrl} />;
+                    return <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} meeting={meeting} />;
                   })
                     : <div className="free-period">No lesson scheduled</div>}
               </div>

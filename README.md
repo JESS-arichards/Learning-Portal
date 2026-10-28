@@ -93,8 +93,8 @@ Date-aware conflict checks protect shared classes, teachers and students.
 
 ## Teacher-owned Teams meetings
 
-On the existing Entra app registration, add **delegated** `User.Read` and
-`Calendars.ReadWrite`, grant tenant admin consent and configure a **Web** redirect:
+On the existing Entra app registration, add **delegated** `User.Read`,
+`Calendars.ReadWrite` and `OnlineMeetings.ReadWrite`, grant tenant admin consent and configure a **Web** redirect:
 `<Learning PUBLIC_BASE_URL>/api/teams/callback`. The flow also requests `openid`,
 `profile` and `offline_access`; application calendar permissions are not used.
 The development callback is:
@@ -116,7 +116,11 @@ Leave `TEAMS_TOKEN_KEY` unset to disable Teams, even when Entra credentials exis
 
 Teachers need an Exchange Online mailbox, a Teams licence and a policy permitting
 meeting scheduling. After saving a dated lesson, an assigned Staff teacher chooses
-**Connect my Microsoft calendar**, then **Create / retry live meetings**. The account
+**Teams**, enters a meeting name and chooses **Allow breakout rooms** as needed.
+Choose **Connect / reconnect my Microsoft calendar**, then **Create / retry all meetings**.
+The connection opens in another tab to preserve the lesson editor. Existing connections
+must reconnect to approve the additional `OnlineMeetings.ReadWrite` scope before
+creating meetings with options. The account
 must be a tenant Member whose Microsoft sign-in name (UPN) matches the central
 teacher's email in the configured school tenant. Matching only the `mail` attribute
 is not sufficient; UPN/email aliases that differ need identity mapping before use.
@@ -128,8 +132,18 @@ recurrence series), with the teacher as organiser and the class's server-side ro
 as required attendees. Microsoft sends real invitations; test with test accounts.
 Invitations support up to 500 unique students after removing duplicates and the
 teacher's own address; larger rosters must be split before meeting creation.
-Students get a **Join live lesson** link only on the matching occurrence date.
+Students get the meeting's named join link only on the matching occurrence date.
+The teacher's class lesson also lists the named meeting links with their dates.
 Portal lessons/resources remain usable when Teams is unconfigured.
+
+The breakout-room option enables or disables rooms via Microsoft Graph; the organiser
+creates rooms and assigns student groups in Teams itself. It cannot change a meeting
+already in progress. Calendar creation and meeting-option application are separate:
+the calendar event is durably saved before updating meeting options. If the options
+cannot be confirmed, the dialog reports the partial creation and offers retry or
+cancellation without sending another invitation. The portal only publishes the join
+link after the options have been confirmed. Schema version 3 adds meeting titles,
+options and their application status without changing existing meetings.
 
 Meeting creation records durable pending state and uses the occurrence ID as Graph
 `transactionId`. Ambiguous network failures remain visible; retry the same occurrence
@@ -490,10 +504,14 @@ Periods cannot overlap on a day. There is one shared weekly day structure; diffe
 year groups/divisions can leave unneeded periods unscheduled. This version has no
 date-specific exceptions, term calendars, rotating weeks or separate division bells.
 
-Teachers use **My classes > Create lesson**, enter a name/description, select one or
-more lesson periods and add named HTTPS or Teams links. Save first to attach files.
-Changes are immediately visible; there is no draft/publish stage. The same lesson and
-resources repeat in every selected weekly period until edited or deleted.
+Teachers use **My classes > Create lesson**, enter a name/description and choose a dated
+schedule and periods. Save first, then use the three resource buttons:
+**Files** opens an upload/download/remove dialog backed by private Azure Blob Storage;
+**External Link** opens a named HTTPS link dialog with add/edit/remove actions;
+**Teams** opens the meeting-name and breakout-room dialog described above.
+Resource changes save immediately, independently of lesson details, including while
+live meetings exist. Shared files and external links appear on every occurrence;
+Teams links are specific to their matching dated occurrence.
 
 The server rejects scheduling a class, shared teacher or shared student into two lessons
 in the same period. Breaks cannot host lessons. Used period IDs cannot be removed or
