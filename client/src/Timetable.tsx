@@ -2,8 +2,9 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
 import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
 import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday } from '../../shared/calendar';
+import { DATE_DISPLAY_POLICY, formatDate } from '../../shared/dateFormatting';
 
-const schoolClock = new Intl.DateTimeFormat('en-GB', {
+const schoolClock = new Intl.DateTimeFormat(DATE_DISPLAY_POLICY.locale, {
   timeZone: 'Asia/Dubai', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 });
 function schoolTime() {
@@ -29,7 +30,7 @@ export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?
       {meetings.filter((meeting) => meeting.lessonId === lesson.id && meeting.state === 'created' && meeting.optionsApplied !== false && meeting.joinUrl).map((meeting) => {
         const occurrence = lesson.occurrences?.find((item) => item.id === meeting.occurrenceId);
         return <a key={meeting.occurrenceId} className="resource teams" href={meeting.joinUrl!} target="_blank" rel="noopener noreferrer">
-          <ExternalLink size={16} /><span>{meeting.title ?? lesson.name}</span><small>{occurrence?.date.split('-').reverse().join('/')} &middot; Join Teams</small>
+          <ExternalLink size={16} /><span>{meeting.title ?? lesson.name}</span><small>{occurrence ? formatDate(occurrence.date) : ''} &middot; Join Teams</small>
         </a>;
       })}
     </div>
@@ -122,9 +123,9 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
           const registrations = daySlots.filter((slot) => data.periodTypes
             .find((type) => type.id === periodTypeId(slot))?.name.trim().toLowerCase() === 'registration').length;
           const periods = daySlots.length - registrations;
-          return <button key={name} onClick={() => dated ? setDate(tabDate) : setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}>{dated ? <strong className="day-tab-heading">{`${name.slice(0, 3)} - ${tabDate.slice(8)}/${tabDate.slice(5, 7)}`}</strong> : <span>{name.slice(0, 3)}</span>}<small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
+          return <button key={name} onClick={() => dated ? setDate(tabDate) : setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}>{dated ? <strong className="day-tab-heading">{`${name.slice(0, 3)} - ${formatDate(tabDate, 'dayMonth')}`}</strong> : <span>{name.slice(0, 3)}</span>}<small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
         })}</div>
-        <div className="day-summary"><h2>{DAYS[day]}{dated && ` ${date.slice(8)}/${date.slice(5, 7)}/${date.slice(0, 4)}`}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
+        <div className="day-summary"><h2>{DAYS[day]}{dated && ` ${formatDate(date)}`}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
         {dated && !status.teaching && <p className="alert" role="status">{status.holiday ? `Holiday: ${status.holiday.name}` : weekday(date) >= 5 ? 'Weekend - no teaching.' : 'Outside school terms - no teaching.'}</p>}
         <div className="timeline" ref={timeline} role="region" aria-label="Day timetable periods" tabIndex={0}>
           {slots.map((slot) => {

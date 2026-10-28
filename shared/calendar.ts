@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { DaySlot } from './learning.js';
+import { formatDate } from './dateFormatting.js';
 
 export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.').refine((value) => {
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -90,7 +91,7 @@ export function previewSchedule(calendar: AcademicCalendar, slots: DaySlot[], sl
         ? slots.find((slot) => slot.day === weekday(date) && slot.start === selected.start && slot.end === selected.end
           && (slot.typeId ?? slot.kind) === (selected.typeId ?? selected.kind) && slot.kind === 'lesson')
         : selected;
-      if (!slot) throw new Error(`No matching ${selected.start}-${selected.end} period on ${date}. Configure that day's period template first.`);
+      if (!slot) throw new Error(`No matching ${selected.start}-${selected.end} period on ${formatDate(date)}. Configure that day's period template first.`);
       occurrences.push({ date, slotId: slot.id });
     }
   }

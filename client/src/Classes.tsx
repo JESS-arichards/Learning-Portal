@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Plus, Users, BookOpen, Pencil } from 'lucide-react';
 import { DAYS, canManage, lessonInputSchema, type User, type Snapshot, type Lesson, type LearningClass, type LessonInput } from '../../shared/learning';
 import { api, errorMessage } from './api';
@@ -6,10 +6,13 @@ import { Resources } from './Timetable';
 import { LessonSchedule } from './LessonSchedule';
 import { LessonResources } from './LessonResources';
 import { schoolDate, EMPTY_CALENDAR, previewSchedule } from '../../shared/calendar';
+import { formatDate } from '../../shared/dateFormatting';
+import { emptyResources, saveLessonSetup } from './lessonSetup';
 
 function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   lesson?: Lesson; classroom: LearningClass; data: Snapshot; user: User; onClose: () => void; refresh: () => Promise<void>;
 }) {
+  const formId = useId();
   const [saved, setSaved] = useState(lesson);
   const [draft, setDraft] = useState<LessonInput>({
     classId: classroom.id, name: lesson?.name ?? '', description: lesson?.description ?? '',
@@ -20,29 +23,59 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [resourceBusy, setResourceBusy] = useState(false);
+  const [resources, setResources] = useState(emptyResources);
+  const [lessonId] = useState(() => lesson?.id ?? crypto.randomUUID());
+  const saving = useRef(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved ? {
+    classId: saved.classId, name: saved.name, description: saved.description, slotIds: saved.slotIds, links: saved.links, schedule: saved.schedule,
+  } : { classId: classroom.id, name: '', description: '', slotIds: [], links: [], schedule: { startDate: schoolDate(), frequency: 'once', count: 1 } })
+    || resources.files.length > 0 || resources.removedFileIds.length > 0 || resources.teams !== null;
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || saving.current) event.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(''); setNotice('');
+    event.preventDefault();
+    if (saving.current || resourceBusy) return;
+    saving.current = true; setBusy(true); setError(''); setNotice('');
+    let detailsSaved = false;
     try {
       const input = lessonInputSchema.parse(draft);
       const preview = previewSchedule(data.calendar ?? EMPTY_CALENDAR, data.slots, input.slotIds, input.schedule!);
-      if (preview.truncated && !window.confirm(`This series stops at term end ${preview.termEnd}, earlier than requested ${preview.requestedEnd}. Actual final lesson date: ${preview.actualEnd}. Continue?`)) return;
-      const result = await api<Lesson>(saved ? `/lessons/${saved.id}` : '/lessons', saved ? 'PUT' : 'POST', input);
-      setSaved(result); await refresh(); setNotice(`Lesson saved with ${result.occurrences?.length ?? 0} period occurrences. Actual final date: ${result.occurrences?.at(-1)?.date}. You can attach files and create Teams meetings below.`);
-    } catch (error) { setError(errorMessage(error)); }
-    finally { setBusy(false); }
+      if (preview.truncated && !window.confirm(`This series stops at term end ${formatDate(preview.termEnd)}, earlier than requested ${formatDate(preview.requestedEnd)}. Actual final lesson date: ${formatDate(preview.actualEnd)}. Continue?`)) return;
+      const result = await saveLessonSetup({ id: lessonId, saved, input, resources, onSaved: (result) => { detailsSaved = true; setSaved(result); }, onProgress: setNotice,
+        onUploaded: (file) => setResources((current) => ({ ...current, files: current.files.filter((item) => item.id !== file.id) })),
+        onRemoved: (id) => setResources((current) => ({ ...current, removedFileIds: current.removedFileIds.filter((item) => item !== id) })),
+        onTeamsSaved: () => setResources((current) => ({ ...current, teams: null })),
+      });
+      await refresh();
+      const finalDate = result.occurrences?.at(-1)?.date;
+      setNotice(`Lesson and resources saved with ${result.occurrences?.length ?? 0} period occurrences. Actual final date: ${finalDate ? formatDate(finalDate) : 'not scheduled'}.`);
+    } catch (error) {
+      setNotice(''); setError(errorMessage(error));
+      if (detailsSaved) {
+        try { await refresh(); }
+        catch (refreshError) { setError(`${errorMessage(error)} Could not reload current status: ${errorMessage(refreshError)} Your pending setup remains in this editor.`); }
+      }
+    }
+    finally { saving.current = false; setBusy(false); }
   }
   return <section className="panel editor" aria-label="Lesson editor">
-    <div className="section-heading"><div><p className="eyebrow">{classroom.name}</p><h2>{saved ? 'Edit lesson' : 'Create a lesson'}</h2></div><button className="btn secondary" disabled={busy || resourceBusy} onClick={onClose}>Close editor</button></div>
-    <form onSubmit={(event) => void submit(event)}>
+    <div className="section-heading"><div><p className="eyebrow">{classroom.name}</p><h2>{saved ? 'Edit lesson' : 'Create a lesson'}</h2></div><button className="btn secondary" disabled={busy || resourceBusy} onClick={() => { if (!dirty || window.confirm('Discard unsaved lesson and resource changes? No pending uploads or invitations will be sent.')) onClose(); }}>Close editor</button></div>
+    <form id={formId} onSubmit={(event) => void submit(event)}>
+      <fieldset disabled={busy || resourceBusy} className="lesson-details-fields">
       <label>Lesson name<input required maxLength={200} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
       <label>Description<textarea rows={4} maxLength={10000} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What will students learn? Include instructions and preparation." /></label>
       <LessonSchedule schedule={draft.schedule!} slotIds={draft.slotIds} slots={data.slots} calendar={data.calendar} onChange={(schedule, slotIds) => setDraft({ ...draft, schedule, slotIds })} />
-      <button className="btn primary" disabled={busy || resourceBusy}>{busy ? 'Saving...' : 'Save lesson'}</button>
+      </fieldset>
     </form>
-    <LessonResources lesson={saved} data={data} user={user} disabled={busy} onBusyChange={setResourceBusy} refresh={refresh}
-      onChange={(result) => { setSaved(result); setDraft((current) => ({ ...current, links: result.links })); }} />
+    <LessonResources lesson={{ ...draft, id: lessonId, files: saved?.files ?? [], occurrences: saved?.occurrences, updatedAt: saved?.updatedAt ?? '' }}
+      links={draft.links} resources={resources} data={data} user={user} disabled={busy} onBusyChange={setResourceBusy} refresh={refresh}
+      onLinksChange={(links) => setDraft((current) => ({ ...current, links }))} onResourcesChange={setResources} />
     {error && <p role="alert" className="alert error">{error}</p>}
     {notice && <p role="status" className="alert success">{notice}</p>}
+    <div className="form-actions"><button type="submit" form={formId} className="btn primary" disabled={busy || resourceBusy}>{busy ? 'Saving...' : 'Save lesson'}</button></div>
   </section>;
 }
 export function Classes({ data, user, refresh }: { data: Snapshot; user: User; refresh: () => Promise<void> }) {
@@ -70,7 +103,7 @@ export function Classes({ data, user, refresh }: { data: Snapshot; user: User; r
       <div className="lesson-grid">{data.lessons.filter((l) => l.classId === classroom.id).map((lesson) => <article key={lesson.id} className="panel managed-lesson">
         <div className="lesson-icon"><BookOpen size={20} /></div><h3>{lesson.name}</h3><p className="description">{lesson.description}</p>
         <div className="schedule-pills">{lesson.slotIds.map((id) => { const s = data.slots.find((s) => s.id === id); return s ? <span className="pill" key={id}>{DAYS[s.day].slice(0, 3)} {s.start}</span> : null; })}</div>
-        <p className="small muted">{lesson.schedule ? `${lesson.schedule.frequency}: ${lesson.schedule.startDate} to ${lesson.occurrences?.at(-1)?.date} (${lesson.occurrences?.length ?? 0} period occurrences)` : 'Legacy weekly lesson - replace with a dated schedule.'}</p>
+        <p className="small muted">{lesson.schedule ? `${lesson.schedule.frequency}: ${formatDate(lesson.schedule.startDate)} to ${lesson.occurrences?.at(-1)?.date ? formatDate(lesson.occurrences.at(-1)!.date) : 'not scheduled'} (${lesson.occurrences?.length ?? 0} period occurrences)` : 'Legacy weekly lesson - replace with a dated schedule.'}</p>
         <Resources lesson={lesson} meetings={data.meetings} /><div className="card-actions"><button className="btn secondary" disabled={busy} onClick={() => setEditor(lesson)}><Pencil size={15} /> Edit</button><button className="text-button danger" disabled={busy} onClick={() => void deleteLesson(lesson)}>Delete lesson</button></div>
       </article>)}</div>
       {!data.lessons.some((l) => l.classId === classroom.id) && <div className="empty panel"><BookOpen size={30} /><h3>A fresh start for this class</h3><p className="muted">Create a lesson, choose weekly periods and add resources.</p></div>}

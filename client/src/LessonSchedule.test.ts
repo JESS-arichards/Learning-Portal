@@ -13,9 +13,9 @@ it('explains term clipping and shows the actual final date before save', () => {
     slots: [{ id: 'period', name: 'P1', day: 0, kind: 'lesson', start: '08:00', end: '09:00' }],
     calendar, onChange: () => {},
   }));
-  expect(html).toContain('Actual final lesson date: 2026-12-07');
-  expect(html).toContain('Requested end date 2027-01-04');
-  expect(html).toContain('term end 2026-12-11');
+  expect(html).toContain('Actual final lesson date: 07/12/2026');
+  expect(html).toContain('Requested end date 04/01/2027');
+  expect(html).toContain('term end 11/12/2026');
   expect(html).toContain('does not continue into the next term');
 });
 it('instructs the teacher to configure the calendar rather than inventing dates', () => {

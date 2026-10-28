@@ -39,8 +39,7 @@ export function App() {
       const currentNavigation = await api<PortalNavigation>('/navigation');
       setUser(current); setData(next); setConfig(currentConfig); setNavigation(currentNavigation); setError('');
     } catch (error) {
-      setData(null);
-      if (error instanceof ApiError && error.status === 401) setUser(null);
+      if (error instanceof ApiError && error.status === 401) { setUser(null); setData(null); }
       setError(errorMessage(error)); throw error;
     }
   }, []);

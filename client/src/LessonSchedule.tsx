@@ -1,5 +1,6 @@
 import { DAYS, type DaySlot } from '../../shared/learning';
 import { previewSchedule, EMPTY_CALENDAR, weekday, type Recurrence, type AcademicCalendar } from '../../shared/calendar';
+import { formatDate } from '../../shared/dateFormatting';
 
 export function LessonSchedule({ schedule, slotIds, slots, calendar, onChange }: {
   schedule: Recurrence; slotIds: string[]; slots: DaySlot[]; calendar?: AcademicCalendar;
@@ -24,9 +25,9 @@ export function LessonSchedule({ schedule, slotIds, slots, calendar, onChange }:
     </label>)}</div>
     {error && <p role="status" className="alert">{error}</p>}
     {preview && <div className="alert success" role="status">
-      <strong>{preview.occurrences.length} period occurrences. Actual final lesson date: {preview.actualEnd}.</strong>
-      {preview.truncated && <p>Requested end date {preview.requestedEnd} goes beyond term end {preview.termEnd}. This series stops at term end; it does not continue into the next term.</p>}
-      {preview.skipped.length > 0 && <details><summary>{preview.skipped.length} dates skipped (no extension)</summary><ul>{preview.skipped.map((item) => <li key={item.date}>{item.date}: {item.reason}</li>)}</ul></details>}
+      <strong>{preview.occurrences.length} period occurrences. Actual final lesson date: {formatDate(preview.actualEnd)}.</strong>
+      {preview.truncated && <p>Requested end date {formatDate(preview.requestedEnd)} goes beyond term end {formatDate(preview.termEnd)}. This series stops at term end; it does not continue into the next term.</p>}
+      {preview.skipped.length > 0 && <details><summary>{preview.skipped.length} dates skipped (no extension)</summary><ul>{preview.skipped.map((item) => <li key={item.date}>{formatDate(item.date)}: {item.reason}</li>)}</ul></details>}
     </div>}
   </fieldset>;
 }

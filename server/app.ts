@@ -43,7 +43,7 @@ function checkStructureChange(...args: Parameters<typeof validateStructureChange
   try { validateStructureChange(...args); }
   catch (error) { if (error instanceof Error) throw new HttpError(409, error.message); throw error; }
 }
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 0 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 1, fieldSize: 36 } });
 const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 0 } });
 
 export function createApp(readiness: { ready: boolean } = { ready: true }) {
@@ -204,19 +204,30 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     res.json(structure);
   });
   async function writeLesson(req: express.Request, res: express.Response) {
-    const input = lessonInputSchema.parse(req.body);
-    const lessonId = req.params.id ? id(req.params.id) : randomUUID();
+    const parsed = req.params.id ? { ...lessonInputSchema.parse(req.body), id: undefined }
+      : lessonInputSchema.extend({ id: idSchema.optional() }).parse(req.body);
+    const { id: creationId, ...input } = parsed;
+    const lessonId = req.params.id ? id(req.params.id) : creationId ?? randomUUID();
     const lesson = await transaction(async (tx) => {
       const data = await snapshot(tx);
       editable(req.user!, data, input.classId);
-      const previous = req.params.id ? lessonById(data, lessonId) : undefined;
+      const previous = req.params.id ? lessonById(data, lessonId) : data.lessons.find((item) => item.id === lessonId);
       if (previous) {
         editable(req.user!, data, previous.classId);
         if (previous.classId !== input.classId) throw new HttpError(400, 'A lesson cannot be moved to a different class.');
       }
-      if (data.meetings?.some((meeting) => meeting.lessonId === lessonId && meeting.state !== 'cancelled'))
+      const sameDetails = previous && previous.name === input.name && previous.description === input.description
+        && JSON.stringify(previous.slotIds) === JSON.stringify(input.slotIds) && JSON.stringify(previous.schedule) === JSON.stringify(input.schedule);
+      if (!req.params.id && previous && (!sameDetails || JSON.stringify(previous.links) !== JSON.stringify(input.links)))
+        throw new HttpError(409, 'This lesson creation ID is already in use with different details. Reload before continuing.');
+      if (!sameDetails && data.meetings?.some((meeting) => meeting.lessonId === lessonId && meeting.state !== 'cancelled'))
         throw new HttpError(409, "Cancel this lesson's live meetings before editing it. Meeting invitations must not become out of sync.");
       if (!input.schedule) throw new HttpError(400, 'Choose a date and recurrence for this lesson.');
+      if (sameDetails && previous) {
+        const result = { ...previous, links: input.links, updatedAt: new Date().toISOString() };
+        await save(tx, 'lesson', lessonId, result);
+        return result;
+      }
       let preview;
       try { preview = previewSchedule(data.calendar ?? EMPTY_CALENDAR, data.slots, input.slotIds, input.schedule); }
       catch (error) { if (error instanceof Error) throw new HttpError(400, error.message); throw error; }
@@ -292,24 +303,41 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     editable(req.user!, data, lessonById(data, id(req.params.id)).classId);
     next();
   }, upload.single('file'), async (req, res) => {
+    const uploadInput = z.object({ resourceId: idSchema.optional() }).strict().parse(req.body);
     if (!req.file) throw new HttpError(400, 'Choose a resource file (maximum 25 MB).');
     const name = req.file.originalname.replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 200);
     if (!/\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|gif|webp|mp3|mp4)$/i.test(name)) {
       throw new HttpError(400, 'Supported files: PDF, Office documents, text/CSV, images, MP3 and MP4.');
     }
     const resource = await prepareResource(name, req.file.buffer);
-    const file = { id: randomUUID(), kind: 'file' as const, name: resource.name, size: resource.data.length };
-    await putFile(file.id, resource.data, resource.contentType);
+    const file = { id: uploadInput.resourceId ?? randomUUID(),
+      kind: 'file' as const, name: resource.name, size: resource.data.length };
+    let uploaded = false;
     try {
       await transaction(async (tx) => {
         const data = await snapshot(tx);
         const lesson = lessonById(data, id(req.params.id));
         editable(req.user!, data, lesson.classId);
+        const existing = data.lessons.find((item) => item.files.some((resource) => resource.id === file.id));
+        if (existing) {
+          const previous = existing.files.find((resource) => resource.id === file.id)!;
+          if (existing.id !== lesson.id || previous.name !== file.name || previous.size !== file.size)
+            throw new HttpError(409, 'This upload ID is already in use. Remove the pending file and select it again.');
+          return;
+        }
         if (lesson.files.length >= 20) throw new HttpError(400, 'A lesson can have at most 20 files.');
+        await putFile(file.id, resource.data, resource.contentType);
+        uploaded = true;
         await save(tx, 'lesson', lesson.id, { ...lesson, files: [...lesson.files, file], updatedAt: new Date().toISOString() });
       });
     } catch (error) {
-      try { await deleteFile(file.id); } catch (cleanupError) { logger.error({ err: cleanupError, fileId: file.id }, 'Failed upload cleanup'); }
+      if (uploaded) {
+        try {
+          const current = await snapshot();
+          if (!current.lessons.some((lesson) => lesson.files.some((resource) => resource.id === file.id)))
+            await deleteFile(file.id);
+        } catch (cleanupError) { logger.error({ err: cleanupError, fileId: file.id }, 'Could not verify upload cleanup; retained blob for safe retry'); }
+      }
       throw error;
     }
     logger.info({ actorId: req.user!.id, lessonId: req.params.id, fileId: file.id }, 'Learning resource uploaded');

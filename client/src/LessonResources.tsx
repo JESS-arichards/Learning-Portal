@@ -1,13 +1,15 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, Files, Upload, Video } from 'lucide-react';
 import { linkSchema, type Lesson, type Snapshot, type User, type LinkResource } from '../../shared/learning';
-import { api, errorMessage, fileBody } from './api';
+import { errorMessage } from './api';
 import { Modal } from './navigation/Modal';
 import { LessonTeams } from './LessonTeams';
+import type { StagedResources } from './lessonSetup';
 
-export function LessonResources({ lesson, data, user, disabled, onChange, onBusyChange, refresh }: {
-  lesson?: Lesson; data: Snapshot; user: User; disabled: boolean; onChange: (lesson: Lesson) => void;
+export function LessonResources({ lesson, links, resources, data, user, disabled, onLinksChange, onResourcesChange, onBusyChange, refresh }: {
+  lesson: Lesson; links: LinkResource[]; resources: StagedResources; data: Snapshot; user: User; disabled: boolean;
+  onLinksChange: (links: LinkResource[]) => void; onResourcesChange: (resources: StagedResources) => void;
   onBusyChange: (busy: boolean) => void; refresh: () => Promise<void>;
 }) {
   const [dialog, setDialog] = useState<'files' | 'link' | 'teams' | null>(null);
@@ -15,86 +17,73 @@ export function LessonResources({ lesson, data, user, disabled, onChange, onBusy
   const [url, setUrl] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
-  const working = useRef(false);
-  const pendingLink = useRef<LinkResource | null>(null);
-  function changeBusy(value: boolean) { working.current = value; setBusy(value); onBusyChange(value); }
-  async function run(work: () => Promise<void>, success: string) {
-    if (working.current) return;
-    changeBusy(true); setError(''); setNotice('');
-    try { await work(); setNotice(success); await refresh(); }
-    catch (error) { setError(errorMessage(error)); }
-    finally { changeBusy(false); }
+  const [meetingBusy, setMeetingBusy] = useState(false);
+  function addLink(event: FormEvent) {
+    event.preventDefault(); setError('');
+    try {
+      const input = linkSchema.parse({ id: editId ?? crypto.randomUUID(),
+        kind: links.find((item) => item.id === editId)?.kind ?? 'link', name, url });
+      if (!editId && links.length >= 30) throw new Error('A lesson can have at most 30 links.');
+      onLinksChange(editId ? links.map((link) => link.id === editId ? input : link) : [...links, input]);
+      setName(''); setUrl(''); setEditId(null);
+    } catch (error) { setError(errorMessage(error)); }
   }
-  async function addLink(event: FormEvent) {
-    event.preventDefault();
-    if (!lesson) return;
-    await run(async () => {
-      const input = linkSchema.parse({ id: editId ?? (pendingLink.current?.name === name.trim() && pendingLink.current.url === url.trim() ? pendingLink.current.id : crypto.randomUUID()),
-        kind: lesson.links.find((item) => item.id === editId)?.kind ?? 'link', name, url });
-      if (!pendingLink.current || pendingLink.current.name !== input.name || pendingLink.current.url !== input.url) pendingLink.current = input;
-      onChange(await api<Lesson>(`/lessons/${lesson.id}/links${editId ? `/${editId}` : ''}`, editId ? 'PUT' : 'POST', pendingLink.current));
-      pendingLink.current = null; setName(''); setUrl(''); setEditId(null);
-    }, 'Resource link saved. Students can open it from the lesson.');
-  }
+  const existingFiles = lesson.files.filter((file) => !resources.removedFileIds.includes(file.id));
+  const fileCount = existingFiles.length + resources.files.length;
   return <section className="file-editor" aria-label="Lesson resources">
     <h3>Lesson resources</h3>
-    <p className="muted">{lesson ? 'Resources are saved immediately, independently of lesson details.' : 'Save the lesson before attaching resources or creating meetings.'}</p>
+    <p className="muted">Choose files, add links and configure Teams before saving. Changes are applied only when you click Save lesson.</p>
     <div className="form-actions">
-      <button type="button" className="btn secondary" disabled={disabled || busy} onClick={() => { setDialog('files'); setError(''); setNotice(''); }}><Files size={18} /> Files</button>
-      <button type="button" className="btn secondary" disabled={disabled || busy} onClick={() => { setDialog('link'); setError(''); setNotice(''); }}><ExternalLink size={18} /> External Link</button>
-      <button type="button" className="btn secondary" disabled={disabled || busy} onClick={() => { setDialog('teams'); setError(''); setNotice(''); }}><Video size={18} /> Teams</button>
+      <button type="button" className="btn secondary" disabled={disabled || meetingBusy} onClick={() => { setDialog('files'); setError(''); }}><Files size={18} /> Files</button>
+      <button type="button" className="btn secondary" disabled={disabled || meetingBusy} onClick={() => { setDialog('link'); setError(''); }}><ExternalLink size={18} /> External Link</button>
+      <button type="button" className="btn secondary" disabled={disabled || meetingBusy} onClick={() => { setDialog('teams'); setError(''); }}><Video size={18} /> Teams</button>
     </div>
+    <p className="small muted">{fileCount} files &middot; {links.length} links{resources.teams ? ` · Teams: ${resources.teams.title} (pending Save lesson)` : ''}</p>
     {dialog && createPortal(<Modal title={dialog === 'files' ? 'Lesson files' : dialog === 'link' ? 'External link' : 'Teams meeting'} className="portal-support-dialog lesson-resource-dialog"
-      onClose={() => { if (!working.current) setDialog(null); }}>
-      {!lesson ? <p className="alert">Save the lesson first, then open this dialog to add resources.</p>
-        : dialog === 'teams' ? <LessonTeams lesson={lesson} data={data} user={user} refresh={refresh} onBusyChange={changeBusy} />
+      onClose={() => { if (!disabled && !meetingBusy) setDialog(null); }}>
+      {dialog === 'teams' ? <LessonTeams lesson={lesson} data={data} user={user} refresh={refresh} staged={resources.teams}
+        onStage={(teams) => { onResourcesChange({ ...resources, teams }); setDialog(null); }}
+        onBusyChange={(value) => { setMeetingBusy(value); onBusyChange(value); }} />
         : dialog === 'files' ? <>
-          <p>Upload lesson files. Students and their authorised parents can download them from this lesson. Up to 20 files, 25 MB each; images are optimized before saving.</p>
-          <label className="upload-field"><Upload size={20} /> Upload a lesson file<input type="file" disabled={busy || lesson.files.length >= 20}
+          <p>Choose lesson files to upload when you save. Up to 20 files, 25 MB each. Files are stored privately and downloaded only by authorised users.</p>
+          <label className="upload-field"><Upload size={20} /> Choose lesson files<input type="file" multiple disabled={disabled || fileCount >= 20}
             accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.mp3,.mp4"
             onChange={(event) => {
-              const file = event.target.files?.[0]; event.target.value = '';
-              if (file) void run(async () => {
-                await api(`/lessons/${lesson.id}/files`, 'POST', fileBody(file));
-                const snapshot = await api<Snapshot>('/learning');
-                const updated = snapshot.lessons.find((item) => item.id === lesson.id);
-                if (!updated) throw new Error('The saved lesson could not be reloaded. Close the editor and reload the page.');
-                onChange(updated);
-              }, 'File uploaded and available to students.');
+              const files = Array.from(event.target.files ?? []); event.target.value = ''; setError('');
+              if (!files.length) return;
+              if (fileCount + files.length > 20) { setError('A lesson can have at most 20 files.'); return; }
+              if (files.some((file) => file.size > 25 * 1024 * 1024)) { setError('Each file must be no larger than 25 MB.'); return; }
+              if (files.some((file) => !/\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|gif|webp|mp3|mp4)$/i.test(file.name))) {
+                setError('Supported files: PDF, Office documents, text/CSV, images, MP3 and MP4.'); return;
+              }
+              onResourcesChange({ ...resources, files: [...resources.files, ...files.map((file) => ({ id: crypto.randomUUID(), file }))] });
             }} /></label>
-          {lesson.files.length === 0 && <p className="muted">No files uploaded yet.</p>}
-          {lesson.files.map((file) => <div className="file-row" key={file.id}>
+          {fileCount === 0 && <p className="muted">No files selected.</p>}
+          {existingFiles.map((file) => <div className="file-row" key={file.id}>
             <a href={`/api/lessons/${lesson.id}/files/${file.id}`}>{file.name}</a>
-            <button type="button" className="text-button danger" disabled={busy} onClick={() => {
-              if (window.confirm('Remove this lesson file?')) void run(async () => {
-                await api(`/lessons/${lesson.id}/files/${file.id}`, 'DELETE');
-                onChange({ ...lesson, files: lesson.files.filter((item) => item.id !== file.id) });
-              }, 'File removed.');
-            }}>Remove</button>
+            <button type="button" className="text-button danger" disabled={disabled} onClick={() => onResourcesChange({ ...resources, removedFileIds: [...resources.removedFileIds, file.id] })}>Remove on save</button>
+          </div>)}
+          {resources.files.map((item) => <div className="file-row" key={item.id}><span>{item.file.name} <small>(pending upload)</small></span>
+            <button type="button" className="text-button danger" disabled={disabled} onClick={() => onResourcesChange({ ...resources, files: resources.files.filter((file) => file.id !== item.id) })}>Remove</button>
           </div>)}
         </> : <>
-          <form onSubmit={(event) => void addLink(event)}>
-            <label>Resource name<input required maxLength={200} disabled={busy} value={name} onChange={(event) => setName(event.target.value)} /></label>
-            <label>HTTPS URL<input required type="url" maxLength={2000} disabled={busy} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://" /></label>
-            <div className="form-actions"><button type="submit" className="btn primary" disabled={busy || (!editId && lesson.links.length >= 30)}>{busy ? 'Saving...' : editId ? 'Save link changes' : 'Add external link'}</button>
-              {editId && <button type="button" className="btn secondary" disabled={busy} onClick={() => { setEditId(null); setName(''); setUrl(''); pendingLink.current = null; }}>Cancel editing</button>}</div>
+          <form onSubmit={addLink}>
+            <label>Resource name<input required maxLength={200} disabled={disabled} value={name} onChange={(event) => setName(event.target.value)} /></label>
+            <label>HTTPS URL<input required type="url" maxLength={2000} disabled={disabled} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://" /></label>
+            <div className="form-actions"><button type="submit" className="btn primary" disabled={disabled || (!editId && links.length >= 30)}>{editId ? 'Apply link changes' : 'Add external link'}</button>
+              {editId && <button type="button" className="btn secondary" disabled={disabled} onClick={() => { setEditId(null); setName(''); setUrl(''); }}>Cancel editing</button>}</div>
           </form>
-          {lesson.links.map((link) => <div className="file-row" key={link.id}>
+          <p className="small muted">Links are attached to the lesson when Save lesson is clicked.</p>
+          {links.map((link) => <div className="file-row" key={link.id}>
             <a href={link.url} target="_blank" rel="noopener noreferrer">{link.name}</a>
-            <button type="button" className="text-button" disabled={busy} onClick={() => { setEditId(link.id); setName(link.name); setUrl(link.url); pendingLink.current = null; }}>Edit</button>
-            <button type="button" className="text-button danger" disabled={busy} onClick={() => {
-              if (window.confirm('Remove this resource link?')) void run(async () => {
-                onChange(await api<Lesson>(`/lessons/${lesson.id}/links/${link.id}`, 'DELETE'));
-                if (editId === link.id) { setEditId(null); setName(''); setUrl(''); pendingLink.current = null; }
-              }, 'Link removed.');
+            <button type="button" className="text-button" disabled={disabled} onClick={() => { setEditId(link.id); setName(link.name); setUrl(link.url); }}>Edit</button>
+            <button type="button" className="text-button danger" disabled={disabled} onClick={() => {
+              onLinksChange(links.filter((item) => item.id !== link.id));
+              if (editId === link.id) { setEditId(null); setName(''); setUrl(''); }
             }}>Remove</button>
           </div>)}
         </>}
-      {busy && dialog !== 'teams' && <p role="status">Saving resource. Keep this dialog open.</p>}
       {error && <p role="alert" className="alert error">{error}</p>}
-      {notice && <p role="status" className="alert success">{notice}</p>}
     </Modal>, document.body)}
   </section>;
 }

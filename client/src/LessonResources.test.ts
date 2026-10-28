@@ -1,11 +1,11 @@
 import { Children, isValidElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PERIOD_TYPES, type Lesson, type Snapshot, type User } from '../../shared/learning';
+import { DEFAULT_PERIOD_TYPES, type Lesson, type Snapshot, type User, type LinkResource } from '../../shared/learning';
+import { emptyResources, type StagedResources } from './lessonSetup';
 
-const state = vi.hoisted(() => ({ values: [] as unknown[], refs: [] as { current: unknown }[], index: 0, refIndex: 0, api: vi.fn(), fileBody: vi.fn() }));
+const state = vi.hoisted(() => ({ values: [] as unknown[], index: 0, api: vi.fn() }));
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(), useEffect: vi.fn(),
-  useRef: (initial: unknown) => { const index = state.refIndex++; return state.refs[index] ?? (state.refs[index] = { current: initial }); },
   useState: (initial: unknown) => {
     const index = state.index++;
     if (!(index in state.values)) state.values[index] = typeof initial === 'function' ? initial() : initial;
@@ -13,19 +13,20 @@ vi.mock('react', async (original) => ({
   },
 }));
 vi.mock('react-dom', () => ({ createPortal: (children: ReactNode) => children }));
-vi.mock('./api', () => ({ api: state.api, fileBody: state.fileBody, errorMessage: (error: unknown) => error instanceof Error ? error.message : String(error) }));
+vi.mock('./api', () => ({ api: state.api, errorMessage: (error: unknown) => error instanceof Error ? error.message : String(error) }));
 import { LessonResources } from './LessonResources';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const user: User = { id: 1, email: 'teacher@school.test', displayName: 'Teacher', roles: ['Staff'], isActive: true, sessionVersion: 0, studentEmails: [] };
-let lesson: Lesson | undefined;
+let lesson: Lesson;
+let links: LinkResource[];
+let resources: StagedResources;
 const data: Snapshot = { classes: [], lessons: [], slots: [], periodTypes: DEFAULT_PERIOD_TYPES };
-const refresh = vi.fn(async () => {});
-const onBusyChange = vi.fn();
-const onChange = vi.fn((updated: Lesson) => { lesson = updated; });
 function render() {
-  state.index = 0; state.refIndex = 0;
-  return LessonResources({ lesson, data, user, disabled: false, onChange, onBusyChange, refresh });
+  state.index = 0;
+  return LessonResources({ lesson, links, resources, data, user, disabled: false,
+    onLinksChange: (value) => { links = value; }, onResourcesChange: (value) => { resources = value; },
+    onBusyChange: vi.fn(), refresh: vi.fn() });
 }
 function find(root: ReactNode, predicate: (props: Record<string, unknown>) => boolean): Record<string, unknown> | null {
   for (const child of Children.toArray(root)) {
@@ -48,84 +49,64 @@ function input(maxLength: number, value: string) {
 function submit() {
   (find(render(), (props) => typeof props.onSubmit === 'function')!.onSubmit as (event: { preventDefault: () => void }) => void)({ preventDefault() {} });
 }
+function choose(files: File[]) {
+  const props = find(render(), (props) => props.type === 'file')!;
+  (props.onChange as (event: { target: { files: File[]; value: string } }) => void)({ target: { files, value: '' } });
+}
 beforeEach(() => {
-  state.values = []; state.refs = []; state.api.mockReset(); state.fileBody.mockReset().mockReturnValue('upload-body');
-  refresh.mockClear(); onChange.mockClear(); onBusyChange.mockClear();
-  lesson = { id: uuid(1), classId: uuid(2), name: 'Fractions', description: '', slotIds: [uuid(3)], links: [], files: [], updatedAt: '' };
-  vi.stubGlobal('document', { body: {} }); vi.stubGlobal('window', { confirm: () => true });
+  state.values = []; state.api.mockReset(); resources = emptyResources(); links = [];
+  lesson = { id: uuid(1), classId: uuid(2), name: '', description: '', slotIds: [], links: [], files: [], updatedAt: '' };
+  vi.stubGlobal('document', { body: {} });
 });
 afterEach(() => vi.unstubAllGlobals());
-it.each([['Files', 'Lesson files'], ['External Link', 'External link'], ['Teams', 'Teams meeting']])('opens the %s dialog', (button, title) => {
+it.each([['Files', 'Lesson files'], ['External Link', 'External link'], ['Teams', 'Teams meeting']])('opens %s before the lesson has been saved', (button, title) => {
   click(button);
   expect(find(render(), (props) => props.title === title)).not.toBeNull();
   expect(state.api).not.toHaveBeenCalled();
 });
-it('explains that an unsaved lesson must be saved before attaching resources', () => {
-  lesson = undefined; click('Teams');
-  expect(find(render(), (props) => props.role === undefined && props.className === 'alert')?.children).toContain('Save the lesson first');
+it('stages and edits a named link without any API write', () => {
+  click('External Link'); input(200, 'Reading'); input(2000, 'https://school.test/reading'); submit();
+  expect(links).toEqual([expect.objectContaining({ kind: 'link', name: 'Reading', url: 'https://school.test/reading' })]);
+  const id = links[0].id;
+  click('Edit'); input(200, 'New reading'); submit();
+  expect(links[0]).toMatchObject({ id, name: 'New reading' });
+  click('Remove'); expect(links).toEqual([]);
   expect(state.api).not.toHaveBeenCalled();
 });
-it('adds a named external link and updates saved resources immediately', async () => {
-  click('External Link'); input(200, 'Reading'); input(2000, 'https://school.test/reading');
-  state.api.mockImplementation(async (_path, _method, body) => ({ ...lesson, links: [body] }));
-  submit();
-  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(state.api).toHaveBeenCalledWith(`/lessons/${uuid(1)}/links`, 'POST', expect.objectContaining({ kind: 'link', name: 'Reading', url: 'https://school.test/reading' }));
-  expect(lesson?.links[0].name).toBe('Reading');
-});
-it('keeps entered values and shows invalid HTTPS URLs without an API write', async () => {
-  click('External Link'); input(200, 'Unsafe'); input(2000, 'http://school.test');
-  submit();
-  await vi.waitFor(() => expect(find(render(), (props) => props.role === 'alert')).not.toBeNull());
+it('keeps entered values and rejects non-HTTPS links before staging', () => {
+  click('External Link'); input(200, 'Unsafe'); input(2000, 'http://school.test'); submit();
+  expect(find(render(), (props) => props.role === 'alert')).not.toBeNull();
+  expect(links).toEqual([]);
   expect(state.api).not.toHaveBeenCalled();
-  expect(find(render(), (props) => props.value === 'Unsafe')).not.toBeNull();
 });
-it('keeps the same resource ID when retrying an ambiguous add failure', async () => {
-  click('External Link'); input(200, 'Reading'); input(2000, 'https://school.test/reading');
-  state.api.mockRejectedValueOnce(new Error('Network failed'));
-  submit();
-  await vi.waitFor(() => expect(find(render(), (props) => props.role === 'alert')?.children).toBe('Network failed'));
-  const first = state.api.mock.calls[0][2];
-  state.api.mockImplementation(async (_path, _method, body) => ({ ...lesson, links: [body] }));
-  submit();
-  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(state.api.mock.calls[1][2]).toEqual(first);
-});
-it('edits an existing link using its identity and removes it without saving lesson details', async () => {
-  const link = { id: uuid(4), kind: 'link' as const, name: 'Old reading', url: 'https://school.test/old' };
-  lesson!.links = [link];
-  click('External Link'); click('Edit'); input(200, 'New reading');
-  state.api.mockImplementation(async (_path, method, body) => ({ ...lesson, links: method === 'DELETE' ? [] : [body] }));
-  submit();
-  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(state.api).toHaveBeenCalledWith(`/lessons/${uuid(1)}/links/${link.id}`, 'PUT', { ...link, name: 'New reading' });
-  click('Remove');
-  await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
-  expect(lesson?.links).toEqual([]);
-});
-it('uploads through the existing private file API and refreshes the saved attachment list', async () => {
+it('stages multiple files and preserves their stable IDs across reopening the dialog', () => {
   click('Files');
-  const file = new File(['PDF'], 'Worksheet.pdf', { type: 'application/pdf' });
-  const updated = { ...lesson!, files: [{ id: uuid(5), kind: 'file' as const, name: file.name, size: 3 }] };
-  state.api.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ...data, lessons: [updated] });
-  const props = find(render(), (props) => props.type === 'file')!;
-  (props.onChange as (event: { target: { files: File[]; value: string } }) => void)({ target: { files: [file], value: file.name } });
-  await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-  expect(state.fileBody).toHaveBeenCalledWith(file);
-  expect(state.api).toHaveBeenCalledWith(`/lessons/${uuid(1)}/files`, 'POST', 'upload-body');
-  expect(lesson?.files).toEqual(updated.files);
+  const files = [new File(['PDF'], 'Worksheet.pdf'), new File(['Text'], 'Notes.txt')];
+  choose(files);
+  expect(resources.files.map((item) => item.file)).toEqual(files);
+  const ids = resources.files.map((item) => item.id);
+  (find(render(), (props) => props.title === 'Lesson files')!.onClose as () => void)();
+  click('Files');
+  expect(resources.files.map((item) => item.id)).toEqual(ids);
+  click('Remove');
+  expect(resources.files).toHaveLength(1);
+  expect(state.api).not.toHaveBeenCalled();
 });
-it('prevents closing the dialog during an in-flight resource operation', async () => {
-  click('External Link'); input(200, 'Reading'); input(2000, 'https://school.test/reading');
-  let resolve!: (value: Lesson) => void;
-  state.api.mockImplementation(() => new Promise<Lesson>((done) => { resolve = done; }));
-  submit();
-  const modal = find(render(), (props) => props.title === 'External link')!;
-  (modal.onClose as () => void)();
-  expect(find(render(), (props) => props.title === 'External link')).not.toBeNull();
-  expect(onBusyChange).toHaveBeenLastCalledWith(true);
-  resolve(lesson!);
-  await vi.waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
-  (find(render(), (props) => props.title === 'External link')!.onClose as () => void)();
-  expect(find(render(), (props) => props.title === 'External link')).toBeNull();
+it('stages removal of existing files without deleting their blob', () => {
+  lesson.files = [{ id: uuid(9), kind: 'file', name: 'Old.pdf', size: 3 }];
+  click('Files'); click('Remove on save');
+  expect(resources.removedFileIds).toEqual([uuid(9)]);
+  expect(lesson.files).toHaveLength(1);
+  expect(state.api).not.toHaveBeenCalled();
+});
+it('enforces file count, size and supported extensions before staging', () => {
+  click('Files');
+  choose(Array.from({ length: 21 }, () => new File(['PDF'], 'Worksheet.pdf')));
+  expect(find(render(), (props) => props.role === 'alert')?.children).toContain('20 files');
+  choose([new File(['script'], 'script.exe')]);
+  expect(find(render(), (props) => props.role === 'alert')?.children).toContain('Supported files');
+  const large = new File([], 'Large.pdf'); Object.defineProperty(large, 'size', { value: 25 * 1024 * 1024 + 1 });
+  choose([large]);
+  expect(find(render(), (props) => props.role === 'alert')?.children).toContain('25 MB');
+  expect(resources.files).toEqual([]);
 });

@@ -115,9 +115,11 @@ Leave `TEAMS_TOKEN_KEY` unset to disable Teams, even when Entra credentials exis
 | `TEAMS_TOKEN_KEY` | Base64-encoded random 32-byte encryption key; keep stable and secret |
 
 Teachers need an Exchange Online mailbox, a Teams licence and a policy permitting
-meeting scheduling. After saving a dated lesson, an assigned Staff teacher chooses
+meeting scheduling. While setting up a dated lesson, an assigned Staff teacher chooses
 **Teams**, enters a meeting name and chooses **Allow breakout rooms** as needed.
-Choose **Connect / reconnect my Microsoft calendar**, then **Create / retry all meetings**.
+Choose **Connect / reconnect my Microsoft calendar**, then **Add Teams meetings on save**.
+The dialog only stages the meeting settings; **Save lesson** creates the meetings
+after saving the lesson details, links and files.
 The connection opens in another tab to preserve the lesson editor. Existing connections
 must reconnect to approve the additional `OnlineMeetings.ReadWrite` scope before
 creating meetings with options. The account
@@ -505,13 +507,44 @@ year groups/divisions can leave unneeded periods unscheduled. This version has n
 date-specific exceptions, term calendars, rotating weeks or separate division bells.
 
 Teachers use **My classes > Create lesson**, enter a name/description and choose a dated
-schedule and periods. Save first, then use the three resource buttons:
-**Files** opens an upload/download/remove dialog backed by private Azure Blob Storage;
+schedule and periods. Before saving, use the three resource buttons:
+**Files** opens a file-selection/download/remove dialog backed by private Azure Blob Storage;
 **External Link** opens a named HTTPS link dialog with add/edit/remove actions;
 **Teams** opens the meeting-name and breakout-room dialog described above.
-Resource changes save immediately, independently of lesson details, including while
-live meetings exist. Shared files and external links appear on every occurrence;
+Files, link edits and new Teams setup are staged until **Save lesson**, which stays
+at the bottom. No file uploads or new invitations happen while configuring a dialog.
+Closing the editor prompts before discarding pending changes. Unsaved selections
+are held in browser memory, not persisted as draft lessons or blobs.
+Saving validates the schedule and Teams connection first, saves the lesson and links,
+then applies file changes, then creates the meeting series. These external operations
+cannot be atomic: partial failures explicitly report what remains and keep pending
+work for retry. Stable lesson/file IDs and occurrence transaction IDs prevent
+duplicates when a successful response was lost. Completed uploads are removed from
+the pending queue. Cancelling an existing Teams invitation remains an explicitly
+confirmed, immediate action, rather than a staged addition.
+Resource-only saves are allowed while live meetings exist; lesson details and
+schedules remain protected against invitation drift. A resource-only save never
+recreates cancelled occurrences. Shared files and external links appear on every occurrence;
 Teams links are specific to their matching dated occurrence.
+
+### Global UK display-date policy
+
+All three portals use the shared `dateFormatting` helpers: short dates are
+`DD/MM/YYYY` (for example `28/10/2026`), long dates are `D Month YYYY`
+(`28 October 2026`), and date/time displays use the same UK date ordering.
+The canonical policy is `Applications-Portal/shared/dateFormatting.ts`.
+After changing that one policy, run `node scripts/sync-date-formatting.mjs`
+from Applications-Portal to update the checked-in copies in Learning and Admissions.
+Use `node scripts/sync-date-formatting.mjs --check` to verify consistency, then
+commit and deploy the affected repositories together. This is a shared code policy,
+not a per-user or runtime administrator setting.
+
+Use the helpers for screens, human-readable exports and generated emails. Preserve
+ISO dates in database/API values, date calculations, logs, import contracts and native
+`type="date"` values. Native date-picker rendering follows browser/OS preferences
+even with document language `en-GB`; textual display dates always use the policy.
+Date-only values never shift with timezone, while timestamp displays preserve their
+existing explicit timezone or device timezone.
 
 The server rejects scheduling a class, shared teacher or shared student into two lessons
 in the same period. Breaks cannot host lessons. Used period IDs cannot be removed or

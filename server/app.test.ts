@@ -20,7 +20,7 @@ import { createApp } from './app.js';
 import { platform, getUser, findUsers, platformImage, navigationFor, publicConfig } from './platform.js';
 import { pool } from './db.js';
 import { snapshot, save, saveStructure, remove, saveCalendar } from './repository.js';
-import { readFileContent, putFile, checkStorage } from './storage.js';
+import { readFileContent, putFile, deleteFile, checkStorage } from './storage.js';
 import { HttpError } from './errors.js';
 import { config } from './config.js';
 import { CSV_HEADERS } from './importClasses.js';
@@ -96,6 +96,66 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('uses a stable client lesson ID to reconcile a lost creation response without new occurrences', async () => {
+    const body = { ...draft, id: uuid(83) };
+    const first = await call('/lessons', 'POST', body);
+    expect(first.status).toBe(200);
+    const created = await first.json();
+    const retry = await call('/lessons', 'POST', body);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ id: body.id, occurrences: created.occurrences });
+    expect(state.lessons.filter((lesson) => lesson.id === body.id)).toHaveLength(1);
+    expect((await call('/lessons', 'POST', { ...body, name: 'Different lesson' })).status).toBe(409);
+  });
+  it('allows saving links with live invitations but forbids changing lesson details or rescheduling', async () => {
+    const response = await call('/lessons', 'POST', draft);
+    const created = await response.json();
+    const occurrenceId = created.occurrences[0].id;
+    state.meetings = [{ occurrenceId, lessonId: created.id, organizerUserId: 10, state: 'created',
+      title: 'Maths workshop', joinUrl: 'https://teams.microsoft.com/test', optionsApplied: false }];
+    const linksOnly = { ...draft, links: [resourceLink] };
+    const updated = await call(`/lessons/${created.id}`, 'PUT', linksOnly);
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({ occurrences: created.occurrences, links: [resourceLink] });
+    expect(state.meetings[0].occurrenceId).toBe(occurrenceId);
+    expect((await call(`/lessons/${created.id}`, 'PUT', { ...linksOnly, name: 'Changed workshop' })).status).toBe(409);
+    expect((await call(`/lessons/${created.id}`, 'PUT', { ...linksOnly, schedule: { ...draft.schedule, count: 2, frequency: 'weekly' } })).status).toBe(409);
+  });
+  it('preserves cancelled occurrence IDs on a resource-only save, instead of creating replacement invitations', async () => {
+    const response = await call('/lessons', 'POST', draft);
+    const created = await response.json();
+    state.meetings = [{ occurrenceId: created.occurrences[0].id, lessonId: created.id, organizerUserId: 10, state: 'cancelled', joinUrl: null }];
+    const result = await call(`/lessons/${created.id}`, 'PUT', { ...draft, links: [resourceLink] });
+    expect(result.status).toBe(200);
+    expect((await result.json()).occurrences).toEqual(created.occurrences);
+  });
+  it('retries a stable file upload ID without duplicate resources or overwriting another lesson blob', async () => {
+    const form = () => {
+      const body = new FormData();
+      body.append('file', new Blob(['PDF']), 'Worksheet.pdf'); body.append('resourceId', uuid(84)); return body;
+    };
+    const path = `/lessons/${uuid(6)}/files`;
+    const first = await call(path, 'POST', form());
+    expect(first.status).toBe(200);
+    expect((await first.json()).id).toBe(uuid(84));
+    expect((await call(path, 'POST', form())).status).toBe(200);
+    expect(state.lessons[0].files.filter((file) => file.id === uuid(84))).toHaveLength(1);
+    expect(putFile).toHaveBeenCalledOnce();
+    state.lessons.push({ ...state.lessons[0], id: uuid(85), files: [] });
+    expect((await call(`/lessons/${uuid(85)}/files`, 'POST', form())).status).toBe(409);
+    expect(putFile).toHaveBeenCalledOnce();
+    expect(deleteFile).not.toHaveBeenCalled();
+  });
+  it('does not delete a committed blob when an upload commit response is lost', async () => {
+    const original = vi.mocked(save).getMockImplementation()!;
+    vi.mocked(save).mockImplementationOnce(async (...args) => { await original(...args); throw new Error('Commit response lost'); });
+    const body = new FormData(); body.append('file', new Blob(['PDF']), 'Worksheet.pdf'); body.append('resourceId', uuid(86));
+    expect((await call(`/lessons/${uuid(6)}/files`, 'POST', body)).status).toBe(500);
+    expect(state.lessons[0].files.some((file) => file.id === uuid(86))).toBe(true);
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect((await call(`/lessons/${uuid(6)}/files`, 'POST', body)).status).toBe(200);
+    expect(putFile).toHaveBeenCalledOnce();
+  });
   it('adds, edits and removes named links without changing a live lesson schedule or its meetings', async () => {
     state.lessons[0].schedule = { startDate: '2026-10-26', frequency: 'once', count: 1 };
     state.lessons[0].occurrences = [{ id: uuid(81), date: '2026-10-26', slotId: uuid(3) }];
