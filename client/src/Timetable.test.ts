@@ -27,6 +27,78 @@ function render(current: User, children: Student[]) {
 }
 afterEach(() => vi.useRealTimers());
 
+describe('day tab period counts', () => {
+  const registrationType = { id: 'registration', name: 'Registration', kind: 'lesson' as const };
+  function counts(periodCount: number, registrationCount: number, typeName = 'Registration') {
+    const snapshot: Snapshot = {
+      ...data,
+      periodTypes: [...data.periodTypes, { ...registrationType, name: typeName }],
+      slots: [
+        ...Array.from({ length: periodCount }, (_, index) => ({ ...data.slots[0], id: `period-${index}` })),
+        ...Array.from({ length: registrationCount }, (_, index) => ({
+          ...data.slots[0], id: `registration-${index}`, name: 'Morning check-in', typeId: registrationType.id,
+        })),
+        { ...data.slots[0], id: 'break', kind: 'break', typeId: 'break', name: 'Break' },
+      ],
+    };
+    const html = renderToStaticMarkup(createElement(Timetable, { data: snapshot, user, children: [child] }));
+    return html.slice(html.indexOf('aria-label="Day of the week"'), html.indexOf('<div class="day-summary">'));
+  }
+  it('shows six teaching periods plus registration rather than seven periods', () => {
+    const html = counts(6, 1);
+    expect(html).toContain('<small>6 periods</small><small>+ 1 registration</small>');
+    expect(html).not.toContain('7 periods');
+  });
+  it('identifies registration by configured type, ignoring case and whitespace', () => {
+    expect(counts(6, 1, ' REGISTRATION ')).toContain('+ 1 registration');
+  });
+  it('keeps ordinary days and empty days free of registration labels', () => {
+    expect(counts(1, 0)).toContain('<small>1 period</small>');
+    expect(counts(0, 0)).toContain('<small>0 periods</small>');
+    expect(counts(1, 0)).not.toContain('registration');
+  });
+  it('counts multiple registrations without including breaks', () => {
+    expect(counts(0, 2)).toContain('<small>0 periods</small><small>+ 2 registrations</small>');
+  });
+});
+
+describe('current school period', () => {
+  function at(iso: string, snapshot = data) {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(iso));
+    return renderToStaticMarkup(createElement(Timetable, { data: snapshot, user, children: [child] }));
+  }
+  it.each(['2026-10-26T04:00:00Z', '2026-10-26T04:59:59Z'])('highlights a lesson during school time at %s', (iso) => {
+    const html = at(iso);
+    expect(html).toContain('timeline-row lesson current-period');
+    expect(html).toContain('aria-current="time"');
+    expect(html).toContain('>Now</span>');
+  });
+  it.each(['2026-10-26T03:59:59Z', '2026-10-26T05:00:00Z', '2026-10-26T08:00:00Z'])('does not highlight outside the period at %s', (iso) => {
+    expect(at(iso)).not.toContain('current-period');
+  });
+  it('highlights a break and a period without lessons', () => {
+    expect(at('2026-10-26T04:30:00Z', { ...data, lessons: [] })).toContain('timeline-row lesson current-period');
+    expect(at('2026-10-26T04:30:00Z', { ...data, slots: [{ ...data.slots[0], kind: 'break' }] }))
+      .toContain('timeline-row break current-period');
+  });
+  it('uses the school day rather than the device day around midnight', () => {
+    const html = at('2026-10-25T20:30:00Z', {
+      ...data, slots: [{ ...data.slots[0], start: '00:00', end: '01:00' }],
+    });
+    expect(html).toContain('<h2>Monday</h2>');
+    expect(html).toContain('current-period');
+  });
+  it('moves the highlight to the next period at the exact boundary', () => {
+    const html = at('2026-10-26T05:00:00Z', {
+      ...data, slots: [...data.slots, { ...data.slots[0], id: 'next', name: 'Period 2', start: '09:00', end: '10:00' }],
+    });
+    expect(html.match(/aria-current="time"/g)).toHaveLength(1);
+    expect(html).toContain('Period 2');
+    expect(html.indexOf('aria-current="time"')).toBeGreaterThan(html.indexOf('Fractions'));
+  });
+});
+
 describe('email-based timetables', () => {
   it('shows the selected child timetable without confusing children that have no IDs', () => {
     const html = render(user, [child, other]);

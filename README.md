@@ -1,5 +1,15 @@
 # Learning Portal
 
+My timetable highlights the current school period with a #FF8200 outline and a
+"Now" label, including breaks and periods without lessons. School time uses
+Asia/Dubai regardless of the viewer's device timezone. The highlight updates
+automatically, applies only to today, and ends when the period ends; other days
+and gaps between periods are not highlighted.
+Day tabs count teaching periods separately from slots whose configured period type
+is named "Registration" (case-insensitive), for example "6 periods" plus
+"1 registration". Registration remains schedulable; scheduled lesson totals are
+unchanged.
+
 On screens up to 600px wide, the shared navigation title wraps rather than
 truncating. The logo is capped at 80px wide and information/menu controls retain
 their touch targets. Longer titles can increase the header height.

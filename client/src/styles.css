@@ -65,13 +65,17 @@ legend { padding: 0 8px; font-size: .9rem; }
 .week-heading p { font-size: .83rem; margin-bottom: 0; }
 .day-tabs { display: flex; gap: 8px; padding: 8px; margin-bottom: 28px; background: var(--glass-bg); border: 1px solid var(--border); border-radius: 13px; overflow-x: auto; }
 .day-tabs button { flex: 1; min-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; padding: 12px 8px; border-radius: 8px; font-size: .88rem; }
-.day-tabs button small { font-size: .65rem; opacity: .8; }
+.day-tabs button small { font-size: .65rem; opacity: .8; max-width: 100%; overflow-wrap: anywhere; }
 .day-tabs button.active { background: var(--brand); border-color: var(--brand-accent); color: var(--brand-foreground); font-weight: 650; box-shadow: 0 4px 16px #0002; }
 .day-tabs button:hover:not(.active) { background: #ffffff09; color: #fff; }
 .day-summary { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 22px; }
 .day-summary h2 { font-size: 1.1rem; }
 .day-summary > span { font-size: .8rem; }
 .timeline-row { display: grid; grid-template-columns: 72px 1fr; gap: 18px; margin-bottom: 22px; }
+.timeline-row.current-period { outline: 2px solid #FF8200; outline-offset: 6px; border-radius: 6px; }
+.current-period .period-label { flex-wrap: wrap; }
+.current-period-label { background: #FF8200; color: #002454; font-size: .7rem; font-weight: 700; padding: 3px 7px; border-radius: 5px; }
+.current-period .period-content::before { background: #FF8200; }
 .time { display: flex; flex-direction: column; gap: 5px; padding-top: 28px; font-size: .9rem; }
 .time span { color: var(--text-muted); font-size: .76rem; }
 .period-content { border-left: 1px solid var(--border); padding-left: 22px; position: relative; }

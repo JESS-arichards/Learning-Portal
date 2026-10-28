@@ -1,6 +1,18 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
 import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass } from '../../shared/learning';
+
+const schoolClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Dubai', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+function schoolTime() {
+  const parts = schoolClock.formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((value) => value.type === type)?.value;
+  return {
+    day: DAYS.findIndex((name) => name === part('weekday')),
+    time: `${part('hour')}:${part('minute')}`,
+  };
+}
 
 export function Resources({ lesson }: { lesson: Lesson }) {
   return (
@@ -32,7 +44,15 @@ function LessonCard({ lesson, classroom }: { lesson: Lesson; classroom: Learning
 }
 export function Timetable({ data, user, children }: { data: Snapshot; user: User; children: Student[] }) {
   const [childEmail, setChildEmail] = useState<string | null>(null);
-  const [day, setDay] = useState((new Date().getDay() + 6) % 7);
+  const [clock, setClock] = useState(schoolTime);
+  const [day, setDay] = useState(clock.day);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const next = schoolTime();
+      setClock((previous) => previous.day === next.day && previous.time === next.time ? previous : next);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
   const [mode, setMode] = useState<'self' | 'children'>(user.roles.includes('Parent') && !user.roles.includes('Student') ? 'children' : 'self');
   const selected = children.find((c) => c.email === childEmail) ?? children[0];
   const parentView = mode === 'children';
@@ -61,16 +81,20 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
         {parentView && selected && <div className="child-heading"><span className="initials">{selected.displayName[0]}</span><div><h2>{selected.displayName}</h2><span className="muted">Weekly learning timetable</span></div></div>}
         <div className="week-heading"><div><h2>Your weekly rhythm</h2><p className="muted">The weekly schedule repeats until your teacher updates it.</p></div><span className="pill"><Clock3 size={14} /> Weekly timetable</span></div>
         <div className="day-tabs" aria-label="Day of the week">{DAYS.map((name, index) => {
-          const periods = data.slots.filter((s) => s.day === index && s.kind === 'lesson').length;
-          return <button key={name} onClick={() => setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}><span>{name.slice(0, 3)}</span><small>{periods} {periods === 1 ? 'period' : 'periods'}</small></button>;
+          const daySlots = data.slots.filter((s) => s.day === index && s.kind === 'lesson');
+          const registrations = daySlots.filter((slot) => data.periodTypes
+            .find((type) => type.id === periodTypeId(slot))?.name.trim().toLowerCase() === 'registration').length;
+          const periods = daySlots.length - registrations;
+          return <button key={name} onClick={() => setDay(index)} aria-pressed={day === index} className={day === index ? 'active' : ''}><span>{name.slice(0, 3)}</span><small>{periods} {periods === 1 ? 'period' : 'periods'}</small>{registrations > 0 && <small>+ {registrations} {registrations === 1 ? 'registration' : 'registrations'}</small>}</button>;
         })}</div>
         <div className="day-summary"><h2>{DAYS[day]}</h2><span className="muted">{lessonCount} {lessonCount === 1 ? 'lesson' : 'lessons'} scheduled</span></div>
         <div className="timeline">
           {slots.map((slot) => {
             const scheduled = lessons.filter((l) => l.slotIds.includes(slot.id));
-            return <div key={slot.id} className={`timeline-row ${slot.kind}`}>
+            const current = slot.day === clock.day && slot.start <= clock.time && clock.time < slot.end;
+            return <div key={slot.id} className={`timeline-row ${slot.kind}${current ? ' current-period' : ''}`} aria-current={current ? 'time' : undefined}>
               <div className="time"><strong>{slot.start}</strong><span>{slot.end}</span></div>
-              <div className="period-content"><div className="period-label">{slot.name}<span className="pill">{data.periodTypes.find((type) => type.id === periodTypeId(slot))?.name}</span></div>
+              <div className="period-content"><div className="period-label">{slot.name}<span className="pill">{data.periodTypes.find((type) => type.id === periodTypeId(slot))?.name}</span>{current && <span className="current-period-label">Now</span>}</div>
                 {slot.kind === 'break' ? <div className="break-card"><span aria-hidden="true">&#9749;</span> Take a break. Recharge for what comes next.</div>
                   : scheduled.length ? scheduled.map((lesson) => <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} />)
                     : <div className="free-period">No lesson scheduled</div>}
