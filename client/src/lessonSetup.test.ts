@@ -8,7 +8,7 @@ vi.mock('./api', () => ({
   fileBody: (file: File) => { const body = new FormData(); body.append('file', file); return body; },
 }));
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const input: LessonInput = { classId: uuid(1), name: 'Fractions', description: '', slotIds: [uuid(2)],
+const input: LessonInput = { classId: uuid(1), lessonTypeId: uuid(90), name: 'Fractions', description: '', slotIds: [uuid(2)],
   links: [{ id: uuid(3), kind: 'link', name: 'Reading', url: 'https://school.test/reading' }],
   schedule: { startDate: '2026-10-28', frequency: 'weekly', count: 2 } };
 let saved: Lesson | undefined;

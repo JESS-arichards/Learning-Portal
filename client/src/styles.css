@@ -110,6 +110,20 @@ legend { padding: 0 8px; font-size: .9rem; }
 .resource.btn { flex: 0 1 auto; max-width: 100%; justify-content: flex-start; text-align: left; }
 .resource > svg, .teams-logo { flex-shrink: 0; }
 .teams-logo { width: 22px; height: 22px; filter: invert(1); }
+.lesson-link-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.lesson-link-list .resource { min-height: 44px; }
+.lesson-image-carousel figure { margin: 0; }
+.lesson-image-carousel img { display: block; width: 100%; height: min(50dvh, 480px); object-fit: contain; }
+.lesson-image-carousel figcaption { margin-top: 12px; overflow-wrap: anywhere; }
+.lesson-image-controls { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 16px; }
+.lesson-image-controls .btn { min-height: 44px; }
+.lesson-type-badge { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 10px; border-radius: 999px; font-size: .75rem; font-weight: 700; line-height: 1.4; margin-bottom: 8px; }
+.lesson-type-badge svg { flex-shrink: 0; }
+.lesson-type-badge span { min-width: 0; overflow-wrap: anywhere; }
+.lesson-type-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.lesson-type-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.lesson-type-list .form-actions { margin: 0; margin-left: auto; }
+.lesson-type-list small { flex-basis: 100%; }
 .family-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 32px; align-items: start; }
 .family-layout > *, .timetable-area { min-width: 0; }
 .children-panel { position: sticky; top: 104px; padding: 24px 18px; }

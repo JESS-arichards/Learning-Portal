@@ -6,6 +6,7 @@ export function visibleSnapshot(user: User, all: Snapshot): Snapshot {
   return {
     slots: all.slots,
     periodTypes: all.periodTypes,
+    lessonTypes: all.lessonTypes,
     calendar: all.calendar,
     meetings: all.meetings?.filter((meeting) => classes.some((c) => all.lessons.some((l) => l.id === meeting.lessonId && l.classId === c.id)))
       .map((meeting) => ({ ...meeting, joinUrl: meeting.optionsApplied === false ? null : meeting.joinUrl })),

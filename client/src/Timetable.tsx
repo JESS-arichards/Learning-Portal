@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { BookOpen, Clock3, ExternalLink, FileDown, Users } from 'lucide-react';
-import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
+import { createPortal } from 'react-dom';
+import { BookOpen, ChevronLeft, ChevronRight, Clock3, ExternalLink, FileDown, Images, Users } from 'lucide-react';
+import { Modal } from './navigation/Modal';
+import { DAYS, canManage, isEnrolledStudent, normaliseEmail, periodTypeId, type LessonType, type Snapshot, type User, type Student, type Lesson, type LearningClass, type LiveMeeting } from '../../shared/learning';
+import { LessonTypeBadge } from './LessonTypeBadge';
 import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday, timetableWeek } from '../../shared/calendar';
 import { DATE_DISPLAY_POLICY, formatDate } from '../../shared/dateFormatting';
 import teamsLogo from './assets/microsoft-teams.svg';
@@ -21,7 +24,11 @@ function schoolTime() {
 
 export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?: LiveMeeting[] }) {
   const [expanded, setExpanded] = useState(false);
+  const [dialog, setDialog] = useState<'links' | 'images' | null>(null);
   const resourceId = useId();
+  const links = lesson.links.filter((link) => link.kind !== 'teams');
+  const images = lesson.files.filter((file) => /\.(png|jpe?g|gif|webp)$/i.test(file.name));
+  const files = lesson.files.filter((file) => !images.includes(file));
   const liveMeetings = meetings.filter((meeting) => meeting.lessonId === lesson.id && meeting.state === 'created'
     && meeting.optionsApplied !== false && meeting.joinUrl);
   if (!lesson.links.length && !lesson.files.length && !liveMeetings.length) return null;
@@ -32,11 +39,17 @@ export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?
       </button>
       <div id={resourceId} className="resource-list" hidden={!expanded}>
         {expanded && <>
-          {lesson.links.map((link) => <a key={link.id} className={`btn secondary resource ${link.kind}`} href={link.url} target="_blank" rel="noopener noreferrer">
+          {links.length > 0 && <button type="button" className="btn secondary resource" aria-haspopup="dialog" onClick={() => setDialog('links')}>
+            <ExternalLink size={18} aria-hidden="true" /><span>Links ({links.length})</span>
+          </button>}
+          {images.length > 0 && <button type="button" className="btn secondary resource" aria-haspopup="dialog" onClick={() => setDialog('images')}>
+            <Images size={18} aria-hidden="true" /><span>Images ({images.length})</span>
+          </button>}
+          {lesson.links.filter((link) => link.kind === 'teams').map((link) => <a key={link.id} className={`btn secondary resource ${link.kind}`} href={link.url} target="_blank" rel="noopener noreferrer">
             {link.kind === 'teams' ? <img className="teams-logo" src={teamsLogo} alt="Microsoft Teams" /> : <ExternalLink size={18} aria-hidden="true" />}
             <span>{link.name}</span><small>{link.kind === 'teams' ? 'Join Teams' : 'Open link'}</small>
           </a>)}
-          {lesson.files.map((file) => <a key={file.id} className="btn secondary resource file" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
+          {files.map((file) => <a key={file.id} className="btn secondary resource file" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
             <FileDown size={18} aria-hidden="true" /><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small>
           </a>)}
           {liveMeetings.map((meeting) => {
@@ -47,14 +60,49 @@ export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?
           })}
         </>}
       </div>
+      {dialog && createPortal(<Modal title={`${lesson.name} - ${dialog === 'links' ? 'Links' : 'Images'}`} className="portal-support-dialog lesson-viewer-dialog" onClose={() => setDialog(null)}>
+        {dialog === 'links' ? <ul className="lesson-link-list">{links.map((link) => <li key={link.id}>
+          <a className="resource" href={link.url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={18} aria-hidden="true" /><span>{link.name}</span><small>Open link</small>
+          </a>
+        </li>)}</ul> : <LessonImages lessonId={lesson.id} images={images} />}
+      </Modal>, document.body)}
     </div>
   );
 }
-function LessonCard({ lesson, classroom, meeting }: { lesson: Lesson; classroom: LearningClass; meeting?: LiveMeeting }) {
+export function LessonImages({ lessonId, images }: { lessonId: string; images: Lesson['files'] }) {
+  const [index, setIndex] = useState(0);
+  const [failedImageId, setFailedImageId] = useState('');
+  const selectedIndex = Math.min(index, images.length - 1);
+  const image = images[selectedIndex];
+  if (!image) return <p role="status">No images available.</p>;
+  function move(step: number) {
+    setIndex((selectedIndex + step + images.length) % images.length);
+    setFailedImageId('');
+  }
+  return <section className="lesson-image-carousel" aria-label="Lesson images" aria-roledescription="carousel" onKeyDown={(event) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1);
+    }
+  }}>
+    <figure>
+      {failedImageId === image.id ? <p role="alert">This image could not be loaded. Try reopening the dialog or download the image below.</p>
+        : <img key={image.id} src={`/api/lessons/${lessonId}/files/${image.id}?preview=1`} alt={image.name} onError={() => setFailedImageId(image.id)} />}
+      <figcaption aria-live="polite" aria-atomic="true">{selectedIndex + 1} of {images.length}: {image.name}</figcaption>
+    </figure>
+    <div className="lesson-image-controls">
+      <button type="button" className="btn secondary" aria-label="Previous image" disabled={images.length < 2} onClick={() => move(-1)}><ChevronLeft size={18} aria-hidden="true" />Previous</button>
+      <a className="btn secondary" href={`/api/lessons/${lessonId}/files/${image.id}`}><FileDown size={18} aria-hidden="true" />Download</a>
+      <button type="button" className="btn secondary" aria-label="Next image" disabled={images.length < 2} onClick={() => move(1)}>Next<ChevronRight size={18} aria-hidden="true" /></button>
+    </div>
+  </section>;
+}
+function LessonCard({ lesson, classroom, meeting, lessonType }: { lesson: Lesson; classroom: LearningClass; meeting?: LiveMeeting; lessonType?: LessonType }) {
   return <article className="lesson-card">
     <div className="lesson-accent" />
     <div className="lesson-card-body">
       <p className="eyebrow">{classroom.name}</p><h3>{lesson.name}</h3>
+      <LessonTypeBadge type={lessonType} />
       <p className="teacher">{classroom.teachers.map((t) => t.displayName).join(', ')}</p>
       {lesson.description && <p className="description">{lesson.description}</p>}
       <Resources lesson={lesson} meetings={meeting ? [meeting] : []} />
@@ -151,7 +199,7 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
                   : scheduled.length ? scheduled.map((lesson) => {
                     const occurrence = lesson.occurrences?.find((item) => item.date === date && item.slotId === slot.id);
                     const meeting = data.meetings?.find((item) => item.occurrenceId === occurrence?.id && item.state === 'created');
-                    return <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} meeting={meeting} />;
+                    return <LessonCard key={lesson.id} lesson={lesson} classroom={classes.find((c) => c.id === lesson.classId)!} meeting={meeting} lessonType={data.lessonTypes?.find((type) => type.id === lesson.lessonTypeId)} />;
                   })
                     : <div className="free-period">No lesson scheduled</div>}
               </div>

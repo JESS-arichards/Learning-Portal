@@ -9,6 +9,7 @@ const child: Student = { email: 'pending@school.test', displayName: 'Pending Stu
 const other: Student = { email: 'other@school.test', displayName: 'Other Student' };
 const teacher = { id: 1, email: 'teacher@school.test', displayName: 'Teacher' };
 const data: Snapshot = {
+  lessonTypes: [{ id: 'seesaw', name: 'Seesaw', colour: '#FFC83D', icon: 'book' }],
   periodTypes: DEFAULT_PERIOD_TYPES,
   classes: [
     { id: 'one', name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [teacher], students: [child] },
@@ -16,7 +17,7 @@ const data: Snapshot = {
   ],
   slots: [{ id: 'period', day: 0, name: 'Period 1', kind: 'lesson', start: '08:00', end: '09:00' }],
   lessons: [
-    { id: 'first', classId: 'one', name: 'Fractions', description: '', links: [], files: [], slotIds: ['period'], updatedAt: '' },
+    { id: 'first', classId: 'one', lessonTypeId: 'seesaw', name: 'Fractions', description: '', links: [], files: [], slotIds: ['period'], updatedAt: '' },
     { id: 'second', classId: 'two', name: 'Poetry', description: '', links: [], files: [], slotIds: ['period'], updatedAt: '' },
   ],
 };
@@ -48,6 +49,9 @@ describe('dated timetable', () => {
   it('shows only this date’s lessons with its live link initially behind the resources toggle', () => {
     const html = dated('2026-10-26');
     expect(html).toContain('Fractions');
+    expect(html).toContain('class="lesson-type-badge"');
+    expect(html).toContain('color:#FFC83D;background-color:#FFC83D26');
+    expect(html).toContain('<span>Seesaw</span>');
     expect(html).toContain('Open Lesson Resources');
     expect(html).not.toContain('https://teams.microsoft.com/test');
     expect(html).toContain('<p class="description">Read the worksheet before joining.</p>');

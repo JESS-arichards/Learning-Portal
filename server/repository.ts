@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   classSchema, lessonSchema, dayStructureSchema, periodTypeId, personSchema, studentSchema,
-  periodTypeSchema, slotSchema, linkSchema, fileSchema, meetingOptionsSchema, type LearningClass, type Lesson, type Snapshot,
+  periodTypeSchema, slotSchema, linkSchema, fileSchema, meetingOptionsSchema, lessonTypeSchema, type LessonType, type LearningClass, type Lesson, type Snapshot,
 } from '../shared/learning.js';
 import { sql, transaction } from './db.js';
 import { academicCalendarSchema, occurrenceSchema, teachingWeekSchema } from '../shared/calendar.js';
@@ -27,7 +27,7 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
     SELECT p.Id AS id, p.Day AS day, p.Name AS name, p.TypeId AS typeId, t.Kind AS kind,
       p.StartTime AS start, p.EndTime AS [end]
       FROM dbo.LearningPeriods p JOIN dbo.LearningPeriodTypes t ON t.Id=p.TypeId ORDER BY p.Day, p.StartTime, p.Id;
-    SELECT Id AS id, ClassId AS classId, Name AS name, Description AS description,
+    SELECT Id AS id, ClassId AS classId, Name AS name, Description AS description, LessonTypeId AS lessonTypeId,
       CONVERT(varchar(40), UpdatedAt, 127) AS updatedAt FROM dbo.LearningLessons ORDER BY Id;
     SELECT LessonId AS lessonId, PeriodId AS periodId FROM dbo.LearningLessonPeriods ORDER BY LessonId, Position;
     SELECT Id AS id, LessonId AS lessonId, Kind AS kind, Name AS name, Url AS url FROM dbo.LearningLessonLinks ORDER BY LessonId, Position;
@@ -40,6 +40,7 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
     SELECT m.OccurrenceId AS occurrenceId, o.LessonId AS lessonId, m.OrganizerUserId AS organizerUserId,
       m.State AS state, m.JoinUrl AS joinUrl, m.Title AS title, m.Options AS options, m.OptionsApplied AS optionsApplied
       FROM dbo.LearningLiveMeetings m JOIN dbo.LearningOccurrences o ON o.Id=m.OccurrenceId;
+    SELECT Id AS id, Name AS name, Colour AS colour, Icon AS icon FROM dbo.LearningLessonTypes ORDER BY Name, Id;
   `);
   const rows = z.tuple([
     z.array(classRow), z.array(teacherRow), z.array(studentRow), z.array(periodTypeSchema),
@@ -50,9 +51,11 @@ async function readSnapshot(connection: Connection): Promise<Snapshot> {
     z.array(occurrenceSchema.extend({ lessonId: uuid })), z.array(z.object({ lessonId: uuid, schedule: z.string() })),
     z.array(z.object({ occurrenceId: uuid, lessonId: uuid, organizerUserId: z.number(), state: z.enum(['pending', 'created', 'cancelled']), joinUrl: z.string().nullable(),
       title: z.string().nullable().optional(), options: z.string().nullable().optional(), optionsApplied: z.boolean() })),
+    z.array(lessonTypeSchema),
   ]).parse(result.recordsets);
-  const [classes, teachers, students, periodTypes, slots, lessons, periods, links, files, years, terms, holidays, occurrences, schedules, meetings] = rows;
+  const [classes, teachers, students, periodTypes, slots, lessons, periods, links, files, years, terms, holidays, occurrences, schedules, meetings, lessonTypes] = rows;
   return {
+    lessonTypes,
     ...dayStructureSchema.parse({ slots, periodTypes }),
     calendar: academicCalendarSchema.parse({
       years: years.map(({ week, ...year }) => ({ ...year, ...(week != null ? { week: teachingWeekSchema.parse(JSON.parse(week)) } : {}) })),
@@ -113,10 +116,10 @@ export async function save(tx: sql.Transaction, kind: 'class' | 'lesson', id: st
   const lesson = lessonSchema.parse(value);
   await recordRequest(tx, id, lesson).query(`
     UPDATE l SET ClassId=JSON_VALUE(@value,'$.classId'),Name=JSON_VALUE(@value,'$.name'),
-      Description=p.description,UpdatedAt=JSON_VALUE(@value,'$.updatedAt')
+      Description=p.description,UpdatedAt=JSON_VALUE(@value,'$.updatedAt'),LessonTypeId=JSON_VALUE(@value,'$.lessonTypeId')
       FROM dbo.LearningLessons l CROSS APPLY OPENJSON(@value) WITH (description nvarchar(max)) p WHERE l.Id=@id;
-    IF @@ROWCOUNT=0 INSERT dbo.LearningLessons(Id,ClassId,Name,Description,UpdatedAt)
-      SELECT @id, JSON_VALUE(@value,'$.classId'),JSON_VALUE(@value,'$.name'),p.description,JSON_VALUE(@value,'$.updatedAt')
+    IF @@ROWCOUNT=0 INSERT dbo.LearningLessons(Id,ClassId,Name,Description,UpdatedAt,LessonTypeId)
+      SELECT @id, JSON_VALUE(@value,'$.classId'),JSON_VALUE(@value,'$.name'),p.description,JSON_VALUE(@value,'$.updatedAt'),JSON_VALUE(@value,'$.lessonTypeId')
       FROM OPENJSON(@value) WITH (description nvarchar(max)) p;
     DELETE FROM dbo.LearningLessonPeriods WHERE LessonId=@id;
     INSERT dbo.LearningLessonPeriods(LessonId,PeriodId,Position)
@@ -179,8 +182,18 @@ export async function saveStructure(tx: sql.Transaction, structure: Structure): 
     `);
 }
 
-export async function remove(tx: sql.Transaction, kind: 'class' | 'lesson', id: string): Promise<void> {
+export async function saveLessonType(tx: sql.Transaction, input: LessonType): Promise<void> {
+  const type = lessonTypeSchema.parse(input);
+  await tx.request().input('id', sql.UniqueIdentifier, type.id)
+    .input('name', sql.NVarChar(100), type.name).input('colour', sql.VarChar(7), type.colour)
+    .input('icon', sql.VarChar(20), type.icon).query(`
+      UPDATE dbo.LearningLessonTypes SET Name=@name,Colour=@colour,Icon=@icon WHERE Id=@id;
+      IF @@ROWCOUNT=0 INSERT dbo.LearningLessonTypes(Id,Name,Colour,Icon) VALUES(@id,@name,@colour,@icon);
+    `);
+}
+
+export async function remove(tx: sql.Transaction, kind: 'class' | 'lesson' | 'lessonType', id: string): Promise<void> {
   uuid.parse(id);
-  const table = kind === 'class' ? 'LearningClasses' : 'LearningLessons';
+  const table = kind === 'class' ? 'LearningClasses' : kind === 'lessonType' ? 'LearningLessonTypes' : 'LearningLessons';
   await tx.request().input('id', sql.UniqueIdentifier, id).query(`DELETE FROM dbo.${table} WHERE Id=@id`);
 }

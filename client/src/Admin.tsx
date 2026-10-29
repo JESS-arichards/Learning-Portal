@@ -5,6 +5,7 @@ import { api, errorMessage, fileBody } from './api';
 import { DayStructure } from './DayStructure';
 import { ClassEditor } from './ClassEditor';
 import { AcademicCalendar } from './AcademicCalendar';
+import { LessonTypes } from './LessonTypes';
 function ClassImport({ data, refresh }: { data: Snapshot; refresh: () => Promise<void> }) {
   const [editor, setEditor] = useState<{ classroom: LearningClass | null } | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -56,9 +57,9 @@ function ClassImport({ data, refresh }: { data: Snapshot; refresh: () => Promise
 export function Admin({ data, refresh, portalUrl }: { data: Snapshot; refresh: () => Promise<void>; portalUrl: string | null }) {
   const [tab, setTab] = useState('classes');
   return <>
-    <div className="page-heading"><div><p className="eyebrow">LEARNING PORTAL ADMINISTRATION</p><h1>Set learning in motion</h1><p className="muted">Manage classes and shape the school week.</p></div><div className="heading-icon"><ShieldCheck /></div></div>
+    <div className="page-heading"><div><p className="eyebrow">LEARNING PORTAL ADMINISTRATION</p><h1>Set learning in motion</h1><p className="muted">Manage classes, lesson types and the school week.</p></div><div className="heading-icon"><ShieldCheck /></div></div>
     <div className="admin-note panel"><ShieldCheck size={20} /><p>User accounts, activation, Learn Admin roles, branding and parent links are managed centrally in Applications Portal.{portalUrl && <> <a href={new URL('/admin/users', portalUrl).href} target="_blank" rel="noopener noreferrer">Open central administration</a> (Full Admin required).</>}</p></div>
-    <div className="segmented"><button className={tab === 'classes' ? 'selected' : ''} onClick={() => setTab('classes')}>Classes</button><button className={tab === 'structure' ? 'selected' : ''} onClick={() => setTab('structure')}>Day structure</button><button className={tab === 'calendar' ? 'selected' : ''} onClick={() => setTab('calendar')}>Academic calendar</button></div>
-    {tab === 'classes' ? <ClassImport data={data} refresh={refresh} /> : tab === 'calendar' ? <AcademicCalendar data={data} refresh={refresh} /> : <DayStructure data={data} refresh={refresh} />}
+    <div className="segmented"><button className={tab === 'classes' ? 'selected' : ''} onClick={() => setTab('classes')}>Classes</button><button className={tab === 'structure' ? 'selected' : ''} onClick={() => setTab('structure')}>Day structure</button><button className={tab === 'calendar' ? 'selected' : ''} onClick={() => setTab('calendar')}>Academic calendar</button><button className={tab === 'lesson-types' ? 'selected' : ''} onClick={() => setTab('lesson-types')}>Lesson types</button></div>
+    {tab === 'classes' ? <ClassImport data={data} refresh={refresh} /> : tab === 'calendar' ? <AcademicCalendar data={data} refresh={refresh} /> : tab === 'lesson-types' ? <LessonTypes data={data} refresh={refresh} /> : <DayStructure data={data} refresh={refresh} />}
   </>;
 }

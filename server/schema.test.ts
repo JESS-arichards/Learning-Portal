@@ -10,6 +10,15 @@ function table(name: string) {
 }
 
 describe('relational Learning schema (offline contract checks)', () => {
+  it('adds lesson types without backfilling legacy lessons and guards referenced types', () => {
+    expect(table('LearningLessonTypes')).toContain('Colour varchar(7)');
+    expect(table('LearningLessonTypes')).toContain('Icon varchar(20)');
+    expect(sql).toContain("IF COL_LENGTH('dbo.LearningLessons', 'LessonTypeId') IS NULL");
+    expect(sql).toContain('ADD LessonTypeId uniqueidentifier NULL');
+    expect(sql).toContain('FK_LearningLessons_LessonType REFERENCES dbo.LearningLessonTypes(Id)');
+    expect(sql).toContain('Version=5');
+    expect(sql).not.toMatch(/UPDATE dbo\.LearningLessons SET LessonTypeId/);
+  });
   it('creates every runtime table conditionally and runs as one atomic batch', () => {
     for (const name of [
       'LearningClasses', 'LearningClassTeachers', 'LearningClassStudents',

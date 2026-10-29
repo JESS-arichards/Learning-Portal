@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addPeriods, dayStructureSchema, DEFAULT_PERIOD_TYPES, periodTypesSchema, canManage, classKey, classSchema, isAdmin, lessonInputSchema, linkSchema, structureSchema, validateSchedule, type DaySlot, type LearningClass, type Lesson } from './learning.js';
+import { addPeriods, dayStructureSchema, DEFAULT_PERIOD_TYPES, periodTypesSchema, canManage, classKey, classSchema, isAdmin, lessonInputSchema, lessonSchema, lessonTypeInputSchema, LESSON_TYPE_ICONS, linkSchema, structureSchema, validateSchedule, type DaySlot, type LearningClass, type Lesson } from './learning.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const teacher = { id: 1, displayName: 'Teacher', email: 'teacher@school.test' };
@@ -55,6 +55,24 @@ describe('weekly structure', () => {
   ].map((invalid) => ({ invalid })))('rejects invalid/overlapping structures %#', ({ invalid }) => expect(structureSchema.safeParse(invalid).success).toBe(false));
 });
 describe('lesson validation and scheduling', () => {
+  it('requires an explicit type on lesson writes while retaining untyped legacy reads', () => {
+    const { id: _id, files: _files, updatedAt: _updated, ...input } = lesson;
+    expect(lessonSchema.parse(lesson).lessonTypeId).toBeUndefined();
+    expect(lessonSchema.parse({ ...lesson, lessonTypeId: null }).lessonTypeId).toBeNull();
+    for (const lessonTypeId of [undefined, null, '', 'not-a-type']) {
+      expect(lessonInputSchema.safeParse({ ...input, lessonTypeId }).success).toBe(false);
+    }
+    expect(lessonInputSchema.parse({ ...input, lessonTypeId: uuid(90) }).lessonTypeId).toBe(uuid(90));
+  });
+  it('validates lesson type names, colours and optional supported icons', () => {
+    expect(lessonTypeInputSchema.parse({ name: ' Seesaw ', colour: '#FFC83D' })).toEqual({ name: 'Seesaw', colour: '#FFC83D', icon: null });
+    for (const icon of [null, ...LESSON_TYPE_ICONS]) {
+      expect(lessonTypeInputSchema.safeParse({ name: 'Type', colour: '#aabbcc', icon }).success).toBe(true);
+    }
+    for (const input of [{ name: '' }, { name: 'x'.repeat(101) }, { colour: 'red' }, { colour: '#fff' }, { colour: '#GG0000' }, { icon: 'unknown' }]) {
+      expect(lessonTypeInputSchema.safeParse({ name: 'Type', colour: '#FFC83D', icon: null, ...input }).success).toBe(false);
+    }
+  });
   it('supports a lesson repeated on different days', () => {
     const draft = { ...lesson, slotIds: [slots[0].id, slots[2].id] };
     expect(() => validateSchedule(draft, [], [classroom], slots)).not.toThrow();
@@ -80,7 +98,8 @@ describe('lesson validation and scheduling', () => {
     expect(() => validateSchedule({ ...lesson, classId: other.id }, [lesson], [pending, other], slots)).toThrow('Timetable clash');
   });
   it('requires at least one unique period', () => {
-    const { id: _id, files: _files, updatedAt: _updated, ...input } = lesson;
+    const { id: _id, files: _files, updatedAt: _updated, ...details } = lesson;
+    const input = { ...details, lessonTypeId: uuid(90) };
     expect(lessonInputSchema.safeParse({ ...input, slotIds: [] }).success).toBe(false);
     expect(lessonInputSchema.safeParse({ ...input, slotIds: [slots[0].id, slots[0].id] }).success).toBe(false);
     expect(lessonInputSchema.safeParse({ ...input, files: [] }).success).toBe(false);

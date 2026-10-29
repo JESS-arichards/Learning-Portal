@@ -8,6 +8,7 @@ import { LessonResources } from './LessonResources';
 import { schoolDate, EMPTY_CALENDAR, previewSchedule } from '../../shared/calendar';
 import { formatDate } from '../../shared/dateFormatting';
 import { emptyResources, saveLessonSetup } from './lessonSetup';
+import { LessonTypeBadge } from './LessonTypeBadge';
 
 function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   lesson?: Lesson; classroom: LearningClass; data: Snapshot; user: User; onClose: () => void; refresh: () => Promise<void>;
@@ -15,7 +16,7 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   const formId = useId();
   const [saved, setSaved] = useState(lesson);
   const [draft, setDraft] = useState<LessonInput>({
-    classId: classroom.id, name: lesson?.name ?? '', description: lesson?.description ?? '',
+    classId: classroom.id, lessonTypeId: lesson?.lessonTypeId ?? '', name: lesson?.name ?? '', description: lesson?.description ?? '',
     slotIds: lesson?.schedule ? lesson.slotIds : [], links: lesson?.links ?? [],
     schedule: lesson?.schedule ?? { startDate: schoolDate(), frequency: 'once', count: 1 },
   });
@@ -27,8 +28,8 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
   const [lessonId] = useState(() => lesson?.id ?? crypto.randomUUID());
   const saving = useRef(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved ? {
-    classId: saved.classId, name: saved.name, description: saved.description, slotIds: saved.slotIds, links: saved.links, schedule: saved.schedule,
-  } : { classId: classroom.id, name: '', description: '', slotIds: [], links: [], schedule: { startDate: schoolDate(), frequency: 'once', count: 1 } })
+    classId: saved.classId, lessonTypeId: saved.lessonTypeId ?? '', name: saved.name, description: saved.description, slotIds: saved.slotIds, links: saved.links, schedule: saved.schedule,
+  } : { classId: classroom.id, lessonTypeId: '', name: '', description: '', slotIds: [], links: [], schedule: { startDate: schoolDate(), frequency: 'once', count: 1 } })
     || resources.files.length > 0 || resources.removedFileIds.length > 0 || resources.teams !== null;
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty || saving.current) event.preventDefault(); };
@@ -66,6 +67,12 @@ function LessonEditor({ lesson, classroom, data, user, onClose, refresh }: {
     <form id={formId} onSubmit={(event) => void submit(event)}>
       <fieldset disabled={busy || resourceBusy} className="lesson-details-fields">
       <label>Lesson name<input required maxLength={200} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+      <label>Lesson type<select required value={draft.lessonTypeId} onChange={(event) => setDraft({ ...draft, lessonTypeId: event.target.value })}>
+        <option value="">Select a lesson type</option>
+        {(data.lessonTypes ?? []).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+      </select></label>
+      {!data.lessonTypes?.length && <p role="alert" className="alert">Ask a Learning administrator to add lesson types before saving a lesson.</p>}
+      <LessonTypeBadge type={data.lessonTypes?.find((type) => type.id === draft.lessonTypeId)} />
       <label>Description<textarea rows={4} maxLength={10000} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What will students learn? Include instructions and preparation." /></label>
       <LessonSchedule schedule={draft.schedule!} slotIds={draft.slotIds} slots={data.slots} calendar={data.calendar} onChange={(schedule, slotIds) => setDraft({ ...draft, schedule, slotIds })} />
       </fieldset>
@@ -102,6 +109,7 @@ export function Classes({ data, user, refresh }: { data: Snapshot; user: User; r
       <div className="section-heading"><h2>Class lessons</h2><span className="muted">{data.lessons.filter((l) => l.classId === classroom.id).length} published</span></div>
       <div className="lesson-grid">{data.lessons.filter((l) => l.classId === classroom.id).map((lesson) => <article key={lesson.id} className="panel managed-lesson">
         <div className="lesson-icon"><BookOpen size={20} /></div><h3>{lesson.name}</h3><p className="description">{lesson.description}</p>
+        <LessonTypeBadge type={data.lessonTypes?.find((type) => type.id === lesson.lessonTypeId)} />
         <Resources lesson={lesson} meetings={data.meetings} />
         <div className="schedule-pills">{lesson.slotIds.map((id) => { const s = data.slots.find((s) => s.id === id); return s ? <span className="pill" key={id}>{DAYS[s.day].slice(0, 3)} {s.start}</span> : null; })}</div>
         <p className="small muted">{lesson.schedule ? `${lesson.schedule.frequency}: ${formatDate(lesson.schedule.startDate)} to ${lesson.occurrences?.at(-1)?.date ? formatDate(lesson.occurrences.at(-1)!.date) : 'not scheduled'} (${lesson.occurrences?.length ?? 0} period occurrences)` : 'Legacy weekly lesson - replace with a dated schedule.'}</p>

@@ -6,7 +6,7 @@ vi.mock('./db.js', async () => {
   const { default: sql } = await import('mssql');
   return { sql, transaction: mocks.transaction };
 });
-import { snapshot, save, saveStructure, saveCalendar, remove } from './repository.js';
+import { snapshot, save, saveLessonType, saveStructure, saveCalendar, remove } from './repository.js';
 import { SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } from '../shared/calendar.js';
 import { DEFAULT_PERIOD_TYPES } from '../shared/learning.js';
 import { sql } from './db.js';
@@ -35,7 +35,7 @@ function records(): unknown[][] {
     [{ lessonId: lesson.id, periodId: uuid(2) }],
     [{ lessonId: lesson.id, ...lesson.links[0] }],
     [{ lessonId: lesson.id, ...lesson.files[0] }],
-    [], [], [], [], [], [],
+    [], [], [], [], [], [], [],
   ];
 }
 beforeEach(() => {
@@ -46,6 +46,25 @@ beforeEach(() => {
 });
 
 describe('relational Learning repository', () => {
+  it('reads stored lesson types and nullable legacy lesson references', async () => {
+    const rows = records();
+    rows[15] = [{ id: uuid(90), name: 'Seesaw', colour: '#FFC83D', icon: null }];
+    rows[5] = [{ ...(rows[5][0] as Record<string, unknown>), lessonTypeId: null }];
+    mocks.query.mockResolvedValue({ recordsets: rows });
+    expect((await snapshot()).lessonTypes).toEqual(rows[15]);
+    expect((await snapshot()).lessons[0].lessonTypeId).toBeNull();
+  });
+  it('parameterizes lesson type configuration and persists lesson references', async () => {
+    const type = { id: uuid(90), name: "Teacher's workshop", colour: '#FFC83D', icon: 'book' as const };
+    await saveLessonType(tx, type);
+    expect(mocks.input).toHaveBeenCalledWith('name', sql.NVarChar(100), type.name);
+    expect(mocks.input).toHaveBeenCalledWith('icon', sql.VarChar(20), type.icon);
+    expect(mocks.query.mock.calls[0][0]).not.toContain(type.name);
+    await save(tx, 'lesson', lesson.id, { ...lesson, lessonTypeId: type.id });
+    expect(mocks.query.mock.calls[1][0]).toContain("LessonTypeId=JSON_VALUE(@value,'$.lessonTypeId')");
+    await remove(tx, 'lessonType', type.id);
+    expect(mocks.query.mock.calls.at(-1)?.[0]).toContain('DELETE FROM dbo.LearningLessonTypes WHERE Id=@id');
+  });
   it('assembles classes, email-only enrolments, periods and complete lesson resources from tables', async () => {
     const data = await snapshot();
     expect(data.classes).toEqual([classroom]);

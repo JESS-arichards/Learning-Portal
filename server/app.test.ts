@@ -12,14 +12,14 @@ vi.mock('./platform.js', () => ({
   platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(), platformImage: vi.fn(), navigationFor: vi.fn(),
   parsePlatform: (schema: { parse: (data: unknown) => unknown }, data: unknown) => schema.parse(data),
 }));
-vi.mock('./repository.js', () => ({ snapshot: vi.fn(), save: vi.fn(), remove: vi.fn(), saveStructure: vi.fn(), saveCalendar: vi.fn() }));
+vi.mock('./repository.js', () => ({ snapshot: vi.fn(), save: vi.fn(), saveLessonType: vi.fn(), remove: vi.fn(), saveStructure: vi.fn(), saveCalendar: vi.fn() }));
 vi.mock('./db.js', () => ({ transaction: vi.fn(async (work: (tx: object) => Promise<unknown>) => work({})), pool: vi.fn() }));
 vi.mock('./storage.js', () => ({ putFile: vi.fn(), readFileContent: vi.fn(), deleteFile: vi.fn(), checkStorage: vi.fn() }));
 
 import { createApp } from './app.js';
 import { platform, getUser, findUsers, platformImage, navigationFor, publicConfig } from './platform.js';
 import { pool } from './db.js';
-import { snapshot, save, saveStructure, remove, saveCalendar } from './repository.js';
+import { snapshot, save, saveLessonType, saveStructure, remove, saveCalendar } from './repository.js';
 import { readFileContent, putFile, deleteFile, checkStorage } from './storage.js';
 import { HttpError } from './errors.js';
 import { config } from './config.js';
@@ -30,6 +30,7 @@ const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
 const user = (id: number, roles: string[], studentEmails: string[] = []): User => ({ ...person(id), roles, studentEmails, isActive: true, sessionVersion: 0 });
 const seed: Snapshot = {
+  lessonTypes: [{ id: uuid(90), name: 'Seesaw', colour: '#FFC83D', icon: null }],
   calendar: {
     years: [{ id: uuid(70), name: '2026/27', start: '2026-09-01', end: '2027-07-01' }],
     terms: [{ id: uuid(71), yearId: uuid(70), name: 'Term 1', start: '2026-09-01', end: '2026-12-11' }],
@@ -58,7 +59,7 @@ async function call(path: string, method = 'GET', body?: unknown, authenticated 
     ...(!form && body !== undefined ? { 'Content-Type': 'application/json' } : {}),
   }, ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }) });
 }
-const draft = { classId: uuid(1), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)], schedule: { startDate: '2026-10-27', frequency: 'once', count: 1 } };
+const draft = { classId: uuid(1), lessonTypeId: uuid(90), name: 'New lesson', description: '', links: [], slotIds: [uuid(4)], schedule: { startDate: '2026-10-27', frequency: 'once', count: 1 } };
 const resourceLink = { id: uuid(80), kind: 'link', name: 'Lesson reading', url: 'https://school.test/reading' };
 beforeEach(async () => {
   config.SQL_SERVERLESS_ENABLED = false;
@@ -81,9 +82,13 @@ beforeEach(async () => {
     if (kind === 'lesson') state.lessons = [...state.lessons.filter((l) => l.id !== id), lessonSchema.parse(value)];
   });
   vi.mocked(saveStructure).mockImplementation(async (_tx, structure) => { Object.assign(state, structure); });
+  vi.mocked(saveLessonType).mockImplementation(async (_tx, type) => {
+    state.lessonTypes = [...(state.lessonTypes ?? []).filter((item) => item.id !== type.id), type];
+  });
   vi.mocked(saveCalendar).mockImplementation(async (_tx, calendar) => { state.calendar = academicCalendarSchema.parse(calendar); });
   vi.mocked(remove).mockImplementation(async (_tx, kind, id) => {
     if (kind === 'class') state.classes = state.classes.filter((c) => c.id !== id);
+    if (kind === 'lessonType') state.lessonTypes = state.lessonTypes?.filter((type) => type.id !== id);
     if (kind === 'lesson') state.lessons = state.lessons.filter((l) => l.id !== id);
   });
   vi.mocked(readFileContent).mockResolvedValue(Buffer.from('pdf'));
@@ -96,6 +101,74 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it.each(['Full Admin', 'Learn Admin'])('allows %s to create, edit and delete unused lesson types', async (role) => {
+    current = user(10, [role]);
+    const input = { name: 'Workshop', colour: '#FFC83D', icon: 'pencil' };
+    const response = await call('/admin/lesson-types', 'POST', input);
+    expect(response.status).toBe(200);
+    const type = await response.json();
+    expect(state.lessonTypes).toContainEqual(type);
+    const updated = await call(`/admin/lesson-types/${type.id}`, 'PUT', { ...input, name: 'Seesaw', icon: null });
+    expect(updated.status).toBe(409);
+    expect((await call(`/admin/lesson-types/${type.id}`, 'PUT', { ...input, name: 'Seminar', icon: null })).status).toBe(200);
+    expect(state.lessonTypes?.find((item) => item.id === type.id)?.icon).toBeNull();
+    expect((await call(`/admin/lesson-types/${type.id}`, 'DELETE')).status).toBe(200);
+    expect(state.lessonTypes?.some((item) => item.id === type.id)).toBe(false);
+  });
+  it.each(['Staff', 'Student', 'Parent'])('prevents %s from managing lesson types', async (role) => {
+    current = user(10, [role]);
+    const input = { name: 'Workshop', colour: '#FFC83D', icon: null };
+    expect((await call('/admin/lesson-types', 'POST', input)).status).toBe(403);
+    expect((await call(`/admin/lesson-types/${uuid(90)}`, 'PUT', input)).status).toBe(403);
+    expect((await call(`/admin/lesson-types/${uuid(90)}`, 'DELETE')).status).toBe(403);
+    expect(saveLessonType).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+  it('validates type configuration and prevents deletion of a used type', async () => {
+    current = user(10, ['Learn Admin']);
+    const input = { name: 'Workshop', colour: '#FFC83D', icon: null };
+    for (const change of [{ name: '' }, { colour: 'red' }, { icon: 'invalid' }]) {
+      expect((await call('/admin/lesson-types', 'POST', { ...input, ...change })).status).toBe(400);
+    }
+    expect((await call('/admin/lesson-types', 'POST', { ...input, name: ' seesaw ' })).status).toBe(409);
+    expect((await call(`/admin/lesson-types/${uuid(99)}`, 'PUT', input)).status).toBe(404);
+    expect((await call(`/admin/lesson-types/${uuid(99)}`, 'DELETE')).status).toBe(404);
+    state.lessons[0].lessonTypeId = uuid(90);
+    expect((await call(`/admin/lesson-types/${uuid(90)}`, 'DELETE')).status).toBe(409);
+    expect(remove).not.toHaveBeenCalled();
+  });
+  it('requires a valid selected type for new and existing lessons and exposes configuration to teachers', async () => {
+    expect((await (await call('/learning')).json()).lessonTypes).toEqual(seed.lessonTypes);
+    for (const lessonTypeId of [undefined, null, '', uuid(99)]) {
+      expect((await call('/lessons', 'POST', { ...draft, lessonTypeId })).status).toBe(400);
+      expect((await call(`/lessons/${uuid(6)}`, 'PUT', { ...draft, lessonTypeId })).status).toBe(400);
+    }
+    expect(save).not.toHaveBeenCalled();
+    const response = await call('/lessons', 'POST', draft);
+    expect(response.status).toBe(200);
+    expect((await response.json()).lessonTypeId).toBe(uuid(90));
+  });
+  it('preserves untyped legacy lessons until an edit selects a type', async () => {
+    expect(state.lessons[0].lessonTypeId).toBeUndefined();
+    const response = await call(`/lessons/${uuid(6)}`, 'PUT', {
+      ...draft, slotIds: [uuid(3)], schedule: { ...draft.schedule, startDate: '2026-10-26' },
+    });
+    expect(response.status).toBe(200);
+    expect(state.lessons[0].lessonTypeId).toBe(uuid(90));
+  });
+  it('allows type-only changes without changing occurrences or Teams meetings', async () => {
+    const created = await (await call('/lessons', 'POST', draft)).json();
+    const type = { id: uuid(91), name: 'Workshop', colour: '#00AAFF', icon: null };
+    state.lessonTypes?.push(type);
+    state.meetings = [{ lessonId: created.id, occurrenceId: created.occurrences[0].id, organizerUserId: 10, state: 'created', joinUrl: 'https://teams.microsoft.com/test' }];
+    const response = await call(`/lessons/${created.id}`, 'PUT', { ...draft, lessonTypeId: type.id });
+    expect(response.status).toBe(200);
+    const updated = await response.json();
+    expect(updated.lessonTypeId).toBe(type.id);
+    expect(updated.occurrences).toEqual(created.occurrences);
+    expect(state.meetings).toHaveLength(1);
+    expect((await call('/lessons', 'POST', { ...draft, id: created.id })).status).toBe(409);
+  });
   it('saves files and links to a newly created hexadecimal lesson ID and accepts mixed-case URLs on retry', async () => {
     const lessonId = 'abcdef01-abcd-4abc-8def-abcdef012345';
     const fileId = 'abcdef02-abcd-4abc-8def-abcdef012345';
@@ -654,6 +727,23 @@ describe('authenticated learning API', () => {
     expect((await call('/admin/period-types', 'PUT', editedBreak)).status).toBe(200);
     expect(state.periodTypes).toEqual(editedBreak);
     expect(state.lessons).toEqual(seed.lessons);
+  });
+  it('previews supported images inline but retains downloads and membership checks', async () => {
+    const path = `/lessons/${uuid(6)}/files/${uuid(7)}`;
+    for (const [name, type] of [['Photo.PNG', 'image/png'], ['Photo.jpg', 'image/jpeg'], ['Photo.jpeg', 'image/jpeg'], ['Photo.gif', 'image/gif'], ['Photo.webp', 'image/webp']]) {
+      state.lessons[0].files[0].name = name;
+      const preview = await call(`${path}?preview=1`);
+      expect(preview.status).toBe(200);
+      expect(preview.headers.get('content-type')).toContain(type);
+      expect(preview.headers.get('content-disposition')).toBe('inline');
+    }
+    expect((await call(path)).headers.get('content-disposition')).toContain('attachment;');
+    state.lessons[0].files[0].name = 'Worksheet.pdf';
+    expect((await call(`${path}?preview=1`)).headers.get('content-disposition')).toContain('attachment;');
+    current = user(22, ['Student']);
+    vi.mocked(readFileContent).mockClear();
+    expect((await call(`${path}?preview=1`)).status).toBe(404);
+    expect(readFileContent).not.toHaveBeenCalled();
   });
   it('protects lesson file downloads by live class membership', async () => {
     current = user(22, ['Student']);

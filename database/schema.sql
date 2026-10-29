@@ -500,6 +500,22 @@ BEGIN TRY
   IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=4)
     INSERT dbo.LearningSchemaMigrations(Version) VALUES(4);
 
+  IF OBJECT_ID(N'dbo.LearningLessonTypes', N'U') IS NULL
+    CREATE TABLE dbo.LearningLessonTypes (
+      Id uniqueidentifier NOT NULL CONSTRAINT PK_LearningLessonTypes PRIMARY KEY,
+      Name nvarchar(100) COLLATE Latin1_General_100_CI_AS NOT NULL CONSTRAINT UQ_LearningLessonTypes_Name UNIQUE,
+      Colour varchar(7) COLLATE Latin1_General_100_BIN2 NOT NULL,
+      Icon varchar(20) COLLATE Latin1_General_100_BIN2 NULL,
+      CONSTRAINT CK_LearningLessonTypes_Name CHECK (LEN(LTRIM(RTRIM(Name))) > 0),
+      CONSTRAINT CK_LearningLessonTypes_Colour CHECK (DATALENGTH(Colour)=7 AND LEFT(Colour,1)='#' AND SUBSTRING(Colour,2,6) NOT LIKE '%[^0-9a-fA-F]%'),
+      CONSTRAINT CK_LearningLessonTypes_Icon CHECK (Icon IS NULL OR Icon IN ('book','video','pencil','flask','calculator','palette','music','globe','monitor','users','star'))
+    );
+  IF COL_LENGTH('dbo.LearningLessons', 'LessonTypeId') IS NULL
+    ALTER TABLE dbo.LearningLessons ADD LessonTypeId uniqueidentifier NULL
+      CONSTRAINT FK_LearningLessons_LessonType REFERENCES dbo.LearningLessonTypes(Id);
+  IF NOT EXISTS (SELECT 1 FROM dbo.LearningSchemaMigrations WHERE Version=5)
+    INSERT dbo.LearningSchemaMigrations(Version) VALUES(5);
+
   COMMIT TRANSACTION;
 END TRY
 BEGIN CATCH

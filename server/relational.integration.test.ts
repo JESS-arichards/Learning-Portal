@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type sql from 'mssql';
 
 vi.mock('./db.js', async () => ({ sql: (await import('mssql')).default, transaction: vi.fn() }));
-import { snapshot, save, saveStructure, saveCalendar, remove } from './repository.js';
+import { snapshot, save, saveLessonType, saveStructure, saveCalendar, remove } from './repository.js';
 import { DEFAULT_PERIOD_TYPES, type LearningClass, type Lesson } from '../shared/learning.js';
 import { SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } from '../shared/calendar.js';
 
@@ -99,6 +99,20 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     expect(run("SELECT COUNT(*) FROM dbo.LearningPeriodTypes;")).toBe('2');
     expect(run("SELECT COUNT(*) FROM sys.tables WHERE name='LearningDocuments';")).toBe('0');
   });
+  it('migrates existing untyped lessons, persists lesson types and prevents deleting referenced types', async () => {
+    reset(); legacy(); run(schema); run(schema);
+    expect(run('SELECT COUNT(*) FROM dbo.LearningLessons WHERE LessonTypeId IS NULL;')).toBe('1');
+    const type = { id: uuid(90), name: 'Seesaw', colour: '#FFC83D', icon: 'book' as const };
+    await saveLessonType(transaction(), type);
+    await save(transaction(), 'lesson', lesson.id, { ...lesson, lessonTypeId: type.id });
+    const data = await readSnapshot();
+    expect(data.lessonTypes).toEqual([type]);
+    expect(data.lessons[0].lessonTypeId).toBe(type.id);
+    await expect(remove(transaction(), 'lessonType', type.id)).rejects.toThrow();
+    await save(transaction(), 'lesson', lesson.id, lesson);
+    await remove(transaction(), 'lessonType', type.id);
+    expect((await readSnapshot()).lessonTypes).toEqual([]);
+  });
   it.each(['object', 'array'])('migrates a legacy %s structure without losing IDs, content or archive data', (shape) => {
     reset(); legacy(shape === 'array' ? [slot] : undefined); run(schema);
     expect(run('SELECT Description FROM dbo.LearningLessons;')).toBe(lesson.description.trim());
@@ -171,7 +185,7 @@ describe.skipIf(!enabled)('isolated LocalDB relational migration and writes', ()
     const data = await readSnapshot();
     expect(data.classes).toEqual([classroom]);
     expect(data.slots).toEqual([slot]);
-    expect(data.lessons[0]).toEqual({ ...lesson, updatedAt: data.lessons[0].updatedAt });
+    expect(data.lessons[0]).toEqual({ ...lesson, lessonTypeId: null, updatedAt: data.lessons[0].updatedAt });
     expect(Date.parse(data.lessons[0].updatedAt)).toBe(Date.parse(lesson.updatedAt));
     expect(run('SELECT Description FROM dbo.LearningLessons;')).toBe(lesson.description.trim());
     await save(transaction(), 'class', classroom.id, { ...classroom, name: 'Renamed' });

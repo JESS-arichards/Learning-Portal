@@ -597,6 +597,29 @@ by membership changes reject the import. Remove a class's lessons before deletin
 
 ## Timetables and resources
 
+### Lesson types
+
+Full Admin and Learn Admin users manage **Admin > Lesson types**. Each type has
+a unique name, a six-digit hex colour and an optional icon selected from the
+built-in icon picker. The live preview shows a rounded badge with coloured text,
+a translucent highlight in the same colour, and the optional icon to its left.
+Badges appear on timetable lessons and teacher class lesson cards.
+
+Teachers must explicitly select an existing type when creating or saving a lesson;
+there is no automatic selection. If no types are configured, an administrator must
+add one before lessons can be saved. Existing lessons remain untyped after migration
+and readable as before, but require a type when next saved from the lesson editor.
+Type-only changes do not reschedule occurrences or modify Teams invitations.
+
+Admin-only `POST /api/admin/lesson-types`, `PUT /api/admin/lesson-types/:id` and
+`DELETE /api/admin/lesson-types/:id` manage the directory. All authorised viewers
+receive the types with `/api/learning`. Deleting a type referenced by any lesson is
+blocked; reassign those lessons first. Renaming or restyling a type updates all its
+badges. Startup schema migration 5 adds `LearningLessonTypes` and a nullable
+`LearningLessons.LessonTypeId` foreign key without backfilling existing lessons.
+
+### Scheduling and lesson resources
+
 Administrators set periods for each Monday–Sunday independently under **Admin > Day
 structure**. Times use 24-hour **school local time**, without browser timezone conversion.
 Periods cannot overlap on a day. There is one shared weekly day structure; different
@@ -604,7 +627,7 @@ year groups/divisions can leave unneeded periods unscheduled. This version has n
 date-specific period-template exceptions, rotating weeks or separate division bells.
 Academic years/terms control included teaching weekdays and holidays separately.
 
-Teachers use **My classes > Create lesson**, enter a name/description and choose a dated
+Teachers use **My classes > Create lesson**, enter a name/description, select a lesson type and choose a dated
 schedule and periods. Before saving, use the three resource buttons:
 **Files** opens a file-selection/download/remove dialog backed by private Azure Blob Storage;
 **External Link** opens a named HTTPS link dialog with add/edit/remove actions;
@@ -632,8 +655,12 @@ schedules remain protected against invitation drift. A resource-only save never
 recreates cancelled occurrences. Shared files and external links appear on every occurrence;
 Teams links are specific to their matching dated occurrence.
 Published lesson descriptions remain visible. In timetables and class lesson cards,
-one **Open Lesson Resources** button below the description reveals the Teams, file
-and external-link buttons; it changes to **Hide Lesson Resources** when expanded.
+one **Open Lesson Resources** button below the description reveals resource buttons;
+it changes to **Hide Lesson Resources** when expanded. **Links** opens a dialog of
+clickable external links. **Images** opens a carousel of all attached PNG, JPEG, GIF
+and WebP images, with previous/next buttons, arrow-key navigation, a position counter
+and a download action. Image previews use the same authorised file endpoint as
+downloads. Other files remain direct downloads and Teams links remain direct join buttons.
 Teams links use the Microsoft Teams brand icon; files and external links use their
 corresponding download/link icons. Timetables show only the matching occurrence's
 confirmed meeting, while class cards include dated meetings for the series.

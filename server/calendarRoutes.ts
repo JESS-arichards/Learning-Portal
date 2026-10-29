@@ -13,7 +13,7 @@ import { formatDate } from '../shared/dateFormatting.js';
 export function createCalendarRouter() {
   const router = Router();
   router.post('/lessons/preview', async (req, res) => {
-    const input = lessonInputSchema.parse(req.body);
+    const input = lessonInputSchema.partial({ lessonTypeId: true }).parse(req.body);
     if (!input.schedule) throw new HttpError(400, 'Choose a dated lesson schedule.');
     const data = await snapshot();
     const classroom = data.classes.find((item) => item.id === input.classId);

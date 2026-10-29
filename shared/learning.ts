@@ -149,8 +149,17 @@ export const fileSchema = z.object({
   name: z.string().min(1).max(200), size: z.number().int().nonnegative(),
 });
 export type FileResource = z.infer<typeof fileSchema>;
+export const LESSON_TYPE_ICONS = ['book', 'video', 'pencil', 'flask', 'calculator', 'palette', 'music', 'globe', 'monitor', 'users', 'star'] as const;
+export const lessonTypeInputSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  colour: z.string().regex(/^#[0-9a-f]{6}$/i, 'Choose a six-digit hex colour.'),
+  icon: z.enum(LESSON_TYPE_ICONS).nullable().default(null),
+}).strict();
+export const lessonTypeSchema = lessonTypeInputSchema.extend({ id: uuidSchema });
+export type LessonType = z.infer<typeof lessonTypeSchema>;
 export const lessonInputSchema = z.object({
   classId: uuidSchema,
+  lessonTypeId: uuidSchema,
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(10000),
   slotIds: z.array(uuidSchema).min(1).max(140).refine((ids) => new Set(ids).size === ids.length, 'Duplicate lesson slots.'),
@@ -159,6 +168,7 @@ export const lessonInputSchema = z.object({
 }).strict();
 export type LessonInput = z.infer<typeof lessonInputSchema>;
 export const lessonSchema = lessonInputSchema.extend({
+  lessonTypeId: uuidSchema.nullish(),
   id: uuidSchema, files: z.array(fileSchema), updatedAt: z.string(),
   occurrences: z.array(occurrenceSchema).optional(),
 });
@@ -181,6 +191,7 @@ export interface LiveMeeting {
 }
 export interface Snapshot {
   classes: LearningClass[]; slots: DaySlot[]; lessons: Lesson[]; periodTypes: PeriodType[];
+  lessonTypes?: LessonType[];
   calendar?: AcademicCalendar; meetings?: LiveMeeting[]; allowScheduleReset?: boolean;
 }
 export function validateStructureChange(current: Snapshot, next: Pick<Snapshot, 'slots' | 'periodTypes'>): void {
@@ -221,7 +232,7 @@ export function mayViewStudent(user: User, student: Student): boolean {
     || isAdmin(user);
 }
 
-export function validateSchedule(lesson: LessonInput & { occurrences?: Occurrence[] }, lessons: Lesson[], classes: LearningClass[], slots: DaySlot[], excludeId?: string): void {
+export function validateSchedule(lesson: Omit<LessonInput, 'lessonTypeId'> & { occurrences?: Occurrence[] }, lessons: Lesson[], classes: LearningClass[], slots: DaySlot[], excludeId?: string): void {
   const classroom = classes.find((c) => c.id === lesson.classId);
   if (!classroom) throw new Error('Class not found.');
   if (lesson.slotIds.some((id) => !slots.some((s) => s.id === id && s.kind === 'lesson'))) {

@@ -11,12 +11,12 @@ import { requireUser, requireAdmin, signOut } from './auth.js';
 import { publicConfig, findUsers, navigationFor, platformImage } from './platform.js';
 import { createSsoRouter } from './sso.js';
 import { transaction, pool } from './db.js';
-import { snapshot, save, saveStructure, remove } from './repository.js';
+import { snapshot, save, saveStructure, saveLessonType, remove } from './repository.js';
 import { previewClasses, previewManualClass, CSV_HEADERS } from './importClasses.js';
 import { visibleSnapshot, childrenFor } from './access.js';
 import { putFile, readFileContent, deleteFile, checkStorage } from './storage.js';
 import { prepareResource } from './optimizeImage.js';
-import { canManage, classKey, classInputSchema, lessonInputSchema, linkSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
+import { canManage, classKey, classInputSchema, lessonInputSchema, lessonTypeInputSchema, linkSchema, dayStructureSchema, periodTypesSchema, periodTypeId, validateStructureChange, validateSchedule, type Lesson, type Snapshot } from '../shared/learning.js';
 import { EMPTY_CALENDAR, previewSchedule } from '../shared/calendar.js';
 import { createCalendarRouter } from './calendarRoutes.js';
 import { createTeamsRouter } from './teams.js';
@@ -204,6 +204,35 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     logger.info({ actorId: req.user!.id, types: periodTypes.length }, 'Learning period types updated');
     res.json(structure);
   });
+  async function writeLessonType(req: express.Request, res: express.Response) {
+    const input = lessonTypeInputSchema.parse(req.body);
+    const typeId = req.params.id ? id(req.params.id) : randomUUID();
+    const result = { ...input, id: typeId };
+    await transaction(async (tx) => {
+      const data = await snapshot(tx);
+      if (req.params.id && !data.lessonTypes?.some((type) => type.id === typeId))
+        throw new HttpError(404, 'Lesson type not found.');
+      if (data.lessonTypes?.some((type) => type.id !== typeId && type.name.toLowerCase() === input.name.toLowerCase()))
+        throw new HttpError(409, 'A lesson type with this name already exists.');
+      await saveLessonType(tx, result);
+    });
+    logger.info({ actorId: req.user!.id, typeId }, 'Learning lesson type saved');
+    res.json(result);
+  }
+  api.post('/admin/lesson-types', requireAdmin, writeLessonType);
+  api.put('/admin/lesson-types/:id', requireAdmin, writeLessonType);
+  api.delete('/admin/lesson-types/:id', requireAdmin, async (req, res) => {
+    const typeId = id(req.params.id);
+    await transaction(async (tx) => {
+      const data = await snapshot(tx);
+      if (!data.lessonTypes?.some((type) => type.id === typeId)) throw new HttpError(404, 'Lesson type not found.');
+      if (data.lessons.some((lesson) => lesson.lessonTypeId === typeId))
+        throw new HttpError(409, 'This lesson type is in use. Change the lessons to another type before deleting it.');
+      await remove(tx, 'lessonType', typeId);
+    });
+    logger.info({ actorId: req.user!.id, typeId }, 'Learning lesson type deleted');
+    res.json({ ok: true });
+  });
   async function writeLesson(req: express.Request, res: express.Response) {
     const parsed = req.params.id ? { ...lessonInputSchema.parse(req.body), id: undefined }
       : lessonInputSchema.extend({ id: idSchema.optional() }).parse(req.body);
@@ -212,6 +241,8 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     const lesson = await transaction(async (tx) => {
       const data = await snapshot(tx);
       editable(req.user!, data, input.classId);
+      if (!data.lessonTypes?.some((type) => type.id === input.lessonTypeId))
+        throw new HttpError(400, 'Choose an existing lesson type. Ask a Learning administrator to configure lesson types if none are available.');
       const previous = req.params.id ? lessonById(data, lessonId) : data.lessons.find((item) => item.id === lessonId);
       if (previous) {
         editable(req.user!, data, previous.classId);
@@ -219,13 +250,13 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
       }
       const sameDetails = previous && previous.name === input.name && previous.description === input.description
         && JSON.stringify(previous.slotIds) === JSON.stringify(input.slotIds) && JSON.stringify(previous.schedule) === JSON.stringify(input.schedule);
-      if (!req.params.id && previous && (!sameDetails || JSON.stringify(previous.links) !== JSON.stringify(input.links)))
+      if (!req.params.id && previous && (!sameDetails || previous.lessonTypeId !== input.lessonTypeId || JSON.stringify(previous.links) !== JSON.stringify(input.links)))
         throw new HttpError(409, 'This lesson creation ID is already in use with different details. Reload before continuing.');
       if (!sameDetails && data.meetings?.some((meeting) => meeting.lessonId === lessonId && meeting.state !== 'cancelled'))
         throw new HttpError(409, "Cancel this lesson's live meetings before editing it. Meeting invitations must not become out of sync.");
       if (!input.schedule) throw new HttpError(400, 'Choose a date and recurrence for this lesson.');
       if (sameDetails && previous) {
-        const result = { ...previous, links: input.links, updatedAt: new Date().toISOString() };
+        const result = { ...previous, lessonTypeId: input.lessonTypeId, links: input.links, updatedAt: new Date().toISOString() };
         await save(tx, 'lesson', lessonId, result);
         return result;
       }
@@ -350,6 +381,13 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     const file = lesson.files.find((f) => f.id === id(req.params.fileId));
     if (!file) throw new HttpError(404, 'Resource not found.');
     const buffer = await readFileContent(file.id);
+    const imageTypes: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+    const imageType = imageTypes[file.name.split('.').pop()!.toLowerCase()];
+    if (req.query.preview === '1' && imageType) {
+      res.setHeader('Content-Disposition', 'inline');
+      res.type(imageType).send(buffer);
+      return;
+    }
     res.setHeader('Content-Disposition', `attachment; filename="resource"; filename*=UTF-8''${encodeURIComponent(file.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16)}`)}`);
     res.type('application/octet-stream').send(buffer);
   });
