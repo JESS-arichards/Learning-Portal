@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router';
 import { BookOpen } from 'lucide-react';
 import { isAdmin, canManage, type User, type Snapshot, type PublicConfig, type Student, type PortalNavigation } from '../../shared/learning';
@@ -11,6 +11,8 @@ import { Admin } from './Admin';
 import { PortalLinks } from './navigation/PortalLinks';
 import { Avatar } from './Avatar';
 import { SupportInfoButton } from './navigation/SupportInfoButton';
+import { clearTeamsSession, initializeTeamsSession, usesTeamsSession } from './teamsSession';
+import { completeTeamsSignIn, startTeamsSignIn } from './teamsSignIn';
 
 type LearningData = Snapshot & { children: Student[] };
 export function App() {
@@ -20,16 +22,29 @@ export function App() {
   const [navigation, setNavigation] = useState<PortalNavigation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const started = useRef(false);
   const bootstrap = useCallback(async () => {
     setLoading(true); setError('');
+    let navigating = false;
     try {
+      await initializeTeamsSession();
+      await completeTeamsSignIn();
       setUser(await api<User>('/me'));
       setConfig(await api<PublicConfig>('/config'));
       setNavigation(await api<PortalNavigation>('/navigation'));
-    } catch (error) { setError(errorMessage(error)); }
-    finally { setLoading(false); }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401 && usesTeamsSession()) {
+        try { await startTeamsSignIn(); navigating = true; }
+        catch (error) { setError(errorMessage(error)); }
+      } else setError(errorMessage(error));
+    }
+    finally { if (!navigating) setLoading(false); }
   }, []);
-  useEffect(() => { void bootstrap(); }, [bootstrap]);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void bootstrap();
+  }, [bootstrap]);
   const refresh = useCallback(async () => {
     try {
       // Fetch current roles as well as learning data so central permission changes update the UI.
@@ -58,13 +73,15 @@ export function App() {
   }, [user?.id, refresh]);
   async function logout() {
     const { redirectUrl } = await api<{ redirectUrl: string }>('/auth/logout', 'POST');
-    window.location.assign(redirectUrl);
+    const target = new URL(redirectUrl);
+    if (usesTeamsSession()) { clearTeamsSession(); target.searchParams.set('teams', '1'); }
+    window.location.assign(target.toString());
   }
   if (loading) return <main className="loading-screen" role="status"><BookOpen size={34} /><p>Opening your Learning Portal...</p></main>;
   if (!config || !navigation) return <main className="loading-screen"><BookOpen size={34} /><h1>Learning Portal unavailable</h1><p role="alert" className="alert error">{error}</p><button className="btn primary" onClick={() => void bootstrap()}>Try again</button></main>;
-  if (!user) return <main className="loading-screen" role="status"><p>Returning to Applications Portal to sign in...</p><button className="btn primary" onClick={redirectToSignIn}>Continue to sign in</button></main>;
+  if (!user) return <main className="loading-screen"><p role="alert">{error || 'Please sign in again.'}</p><button className="btn primary" onClick={usesTeamsSession() ? () => void bootstrap() : redirectToSignIn}>Continue to sign in</button></main>;
   const manager = user.roles.includes('Staff') || isAdmin(user) || data?.classes.some((c) => canManage(user, c));
-  const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} />;
+  const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} />;
   return <BrowserRouter>
     <div className="fluid-bg" aria-hidden="true"><div className="orb orb-1" /><div className="orb orb-2" /><div className="orb orb-3" /></div>
     <NavigationBar appName={config.branding.appName} application="learn" brand={config.branding.logoUrl ? <img src={config.branding.logoUrl} alt={config.branding.organisationName} /> : <BookOpen size={26} />} desktopSidebar navigation={links} mobileNavigation={<ul className="jess-nav-portal-links">{links}</ul>}

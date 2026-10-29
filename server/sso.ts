@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { SignJWT, jwtVerify, errors } from 'jose';
 import { z } from 'zod';
 import { config } from './config.js';
-import { issueSession } from './auth.js';
+import { issueSession, issueTeamsSession } from './auth.js';
 import { HttpError } from './errors.js';
 import { platform, parsePlatform } from './platform.js';
 import { userSchema } from '../shared/learning.js';
@@ -19,7 +19,7 @@ export function safeReturnPath(value: unknown): string {
     || /[\\\x00-\x20\x7f]/.test(value)) return '/';
   const parsed = new URL(value, config.PUBLIC_BASE_URL);
   if (parsed.origin !== new URL(config.PUBLIC_BASE_URL).origin || parsed.pathname.startsWith('/api/')
-    || parsed.pathname === '/login') return '/';
+    || parsed.pathname === '/login' || parsed.pathname === '/teams-signin') return '/';
   return value;
 }
 export function createSsoRouter() {
@@ -28,6 +28,25 @@ export function createSsoRouter() {
     windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Too many sign-in requests. Please wait a few minutes.' },
   }));
+  ssoRouter.post('/teams/start', async (req, res) => {
+    if (!config.TEAMS_ENABLED) throw new HttpError(403, 'Learning in Teams is not enabled. Contact support.');
+    const input = z.object({ state: opaque, codeChallenge: opaque }).strict().parse(req.body);
+    const { authorizationUrl } = parsePlatform(z.object({ authorizationUrl: z.url() }),
+      await platform('/learning/sso/start', 'POST', { ...input, host: 'teams' }));
+    const target = new URL(authorizationUrl);
+    if (target.origin !== new URL(config.APPLICATIONS_PORTAL_URL).origin || target.pathname !== '/learning-signin'
+      || target.searchParams.get('teams') !== '1' || !opaque.safeParse(target.searchParams.get('request')).success
+      || target.username || target.password || target.hash) {
+      throw new HttpError(503, 'The central Portal returned an invalid Teams sign-in destination. Contact support.');
+    }
+    res.json({ authorizationUrl });
+  });
+  ssoRouter.post('/teams/redeem', async (req, res) => {
+    if (!config.TEAMS_ENABLED) throw new HttpError(403, 'Learning in Teams is not enabled. Contact support.');
+    const input = z.object({ code: opaque, codeVerifier: opaque }).strict().parse(req.body);
+    const user = parsePlatform(userSchema, await platform('/learning/sso/redeem', 'POST', input));
+    res.json({ sessionToken: await issueTeamsSession(user) });
+  });
   ssoRouter.get('/start', async (req, res) => {
     const state = randomBytes(32).toString('base64url');
     const verifier = randomBytes(32).toString('base64url');

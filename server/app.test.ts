@@ -6,7 +6,7 @@ import sharp from 'sharp';
 vi.mock('./config.js', () => ({ config: {
   APPLICATIONS_PORTAL_URL: 'http://localhost:8080', PUBLIC_BASE_URL: 'http://localhost:5174',
   SESSION_SECRET: 'test-learning-secret-that-is-long-enough', production: false, SQL_SERVERLESS_ENABLED: false,
-  ALLOW_SCHEDULE_RESET: false,
+  ALLOW_SCHEDULE_RESET: false, TEAMS_ENABLED: false,
 } }));
 vi.mock('./platform.js', () => ({
   platform: vi.fn(), publicConfig: vi.fn(), getUser: vi.fn(), findUsers: vi.fn(), platformImage: vi.fn(), navigationFor: vi.fn(),
@@ -64,6 +64,7 @@ const resourceLink = { id: uuid(80), kind: 'link', name: 'Lesson reading', url: 
 beforeEach(async () => {
   config.SQL_SERVERLESS_ENABLED = false;
   config.ALLOW_SCHEDULE_RESET = false;
+  config.TEAMS_ENABLED = false;
   await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not start');
@@ -101,6 +102,25 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it('only allows Teams framing when explicitly enabled and retains the browser default otherwise', async () => {
+    const ordinary = await call('/live');
+    expect(ordinary.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(ordinary.headers.get('content-security-policy')).toContain("frame-ancestors 'self'");
+    expect(ordinary.headers.get('content-security-policy')).not.toContain('https://teams.microsoft.com');
+    config.TEAMS_ENABLED = true;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve) => { server = createApp().listen(0, '127.0.0.1', resolve); });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    url = `http://127.0.0.1:${address.port}`;
+    const embedded = await call('/live');
+    expect(embedded.headers.has('x-frame-options')).toBe(false);
+    expect(embedded.headers.get('content-security-policy')).toContain(
+      "frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.cloud.microsoft",
+    );
+    expect(embedded.headers.get('cross-origin-opener-policy')).toBe('same-origin-allow-popups');
+    expect(embedded.headers.get('content-security-policy')).toContain("img-src 'self' http://localhost:8080 data: blob:");
+  });
   it.each(['Full Admin', 'Learn Admin'])('allows %s to create, edit and delete unused lesson types', async (role) => {
     current = user(10, [role]);
     const input = { name: 'Workshop', colour: '#FFC83D', icon: 'pencil' };

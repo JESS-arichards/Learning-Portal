@@ -6,6 +6,7 @@ import { errorMessage } from './api';
 import { Modal } from './navigation/Modal';
 import { LessonTeams } from './LessonTeams';
 import type { StagedResources } from './lessonSetup';
+import { ResourceLink } from './AuthenticatedResource';
 
 export function LessonResources({ lesson, links, resources, data, user, disabled, onLinksChange, onResourcesChange, onBusyChange, refresh }: {
   lesson: Lesson; links: LinkResource[]; resources: StagedResources; data: Snapshot; user: User; disabled: boolean;
@@ -68,7 +69,7 @@ export function LessonResources({ lesson, links, resources, data, user, disabled
           {existingFiles.length > 0 && <p role="status" className="alert success">{existingFiles.length} {existingFiles.length === 1 ? 'file uploaded' : 'files uploaded'} successfully and saved to this lesson.</p>}
           {fileCount === 0 && <p className="muted">No files selected.</p>}
           {existingFiles.map((file) => <div className="file-row" key={file.id}>
-            <a href={`/api/lessons/${lesson.id}/files/${file.id}`}>{file.name}</a>
+            <ResourceLink href={`/api/lessons/${lesson.id}/files/${file.id}`} fileName={file.name}>{file.name}</ResourceLink>
             <button type="button" className="text-button danger" disabled={disabled} onClick={() => { setNotice('File removal queued. Click Save lesson to apply it.'); onResourcesChange({ ...resources, removedFileIds: [...resources.removedFileIds, file.id] }); }}>Remove on save</button>
           </div>)}
           {resources.files.map((item) => <div className="file-row" key={item.id}><span>{item.file.name} <small>(pending upload)</small></span>

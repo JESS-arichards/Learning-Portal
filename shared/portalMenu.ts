@@ -1,4 +1,4 @@
-export type MenuIcon = 'home' | 'streaming' | 'learning' | 'parking' | 'trips' | 'absence' | 'tasks' | 'timetable' | 'classes' | 'admin';
+export type MenuIcon = 'home' | 'streaming' | 'communication' | 'learning' | 'parking' | 'trips' | 'absence' | 'tasks' | 'timetable' | 'classes' | 'admin';
 export interface PortalLink {
   id: string;
   label: string;
@@ -16,6 +16,7 @@ export type PortalMenuItem = PortalLink | PortalGroup;
 
 export function portalMenu(options: {
   staff: boolean; trips: boolean; absence: boolean; tasks: boolean; learning: boolean; learningAdmin: boolean;
+  communication?: boolean;
 }): PortalMenuItem[] {
   const link = (id: MenuIcon, label: string, path: string, application: 'apps' | 'learn' = 'apps'): PortalLink => ({
     id, label, icon: id, path, application,
@@ -23,6 +24,7 @@ export function portalMenu(options: {
   return [
     link('home', 'Home', '/'),
     link('streaming', 'Streaming', '/streaming'),
+    ...(options.communication ? [link('communication', 'Communication', '/communication')] : []),
     ...(options.learning ? [{
       id: 'learning', label: 'Learning Portal', icon: 'learning' as const,
       children: [
