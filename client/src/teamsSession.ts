@@ -3,6 +3,14 @@ let token: string | null = null;
 let initialization: Promise<boolean> | null = null;
 const modeKey = 'learning.teams.mode';
 const sessionKey = 'learning.teams.session';
+const handshakeTimeoutMs = 15_000;
+
+// Teams never answers the SDK handshake from an origin missing from the app's validDomains, so bound the wait.
+function withTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Teams handshake timed out.')), handshakeTimeoutMs); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 export function usesTeamsSession() { return active; }
 export function teamsSessionHeaders(): Record<string, string> {
@@ -31,8 +39,8 @@ export async function initializeTeamsSession(): Promise<boolean> {
   initialization ??= (async () => {
     try {
       const teams = await import('@microsoft/teams-js');
-      await teams.app.initialize();
-      const context = await teams.app.getContext();
+      await withTimeout(teams.app.initialize());
+      const context = await withTimeout(teams.app.getContext());
       if (context.app.host.name !== teams.HostName.teams && context.app.host.name !== teams.HostName.teamsModern) {
         throw new Error('Unsupported embedding host.');
       }
@@ -45,7 +53,7 @@ export async function initializeTeamsSession(): Promise<boolean> {
     } catch {
       active = false;
       token = null;
-      throw new Error('Unable to connect Learning to Teams. Reopen the Portal Teams app and check its Learning domain configuration.');
+      throw new Error('Unable to connect Learning to Teams. Reopen the Portal Teams app; if this persists, ask your administrator to add the Learning domain to the Teams app package (validDomains).');
     }
   })();
   try { return await initialization; }
