@@ -58,4 +58,16 @@ describe('Learning Teams host and tab-local sessions', () => {
     expect(host.teamsSessionHeaders()).toEqual({});
     await expect(host.initializeTeamsSession()).resolves.toBe(true);
   });
+  it('fails with guidance instead of hanging when Teams never answers the handshake', async () => {
+    vi.useFakeTimers();
+    try {
+      window.location.search = '?teams=1';
+      mocks.initialize.mockReturnValueOnce(new Promise(() => {}));
+      const host = await import('./teamsSession');
+      const result = expect(host.initializeTeamsSession()).rejects.toThrow('Unable to connect Learning to Teams');
+      await vi.advanceTimersByTimeAsync(15_000);
+      await result;
+      expect(host.usesTeamsSession()).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
 });
