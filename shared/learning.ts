@@ -40,9 +40,9 @@ export type PublicConfig = z.infer<typeof publicConfigSchema>;
 const menuLinkSchema = z.object({
   id: z.string(),
   label: z.string(),
-  icon: z.enum(['home', 'streaming', 'learning', 'parking', 'trips', 'absence', 'tasks', 'timetable', 'classes', 'admin']),
+  icon: z.enum(['home', 'streaming', 'communication', 'learning', 'parking', 'trips', 'absence', 'tasks', 'timetable', 'classes', 'admin']),
   application: z.enum(['apps', 'learn']),
-  path: z.enum(['/', '/streaming', '/parking', '/trips', '/staff-absence', '/tasks', '/classes', '/admin']),
+  path: z.enum(['/', '/streaming', '/communication', '/parking', '/trips', '/staff-absence', '/tasks', '/classes', '/admin']),
 });
 const menuItemsSchema: z.ZodType<PortalMenuItem[]> = z.array(z.union([
   menuLinkSchema,
