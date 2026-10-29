@@ -9,8 +9,12 @@ Day tabs count teaching periods separately from slots whose configured period ty
 is named "Registration" (case-insensitive), for example "6 periods" plus
 "1 registration". Registration remains schedulable; scheduled lesson totals are
 unchanged.
-Dated day tabs display a single bold heading such as "Wed - 28/10", with period
-and registration counts underneath. On narrow screens the tab strip scrolls.
+Dated day tabs display a bold heading such as "Wed - 28/10", with period
+and registration counts underneath. When the timetable area is at most 600px wide,
+the day and date stack on separate lines. Tabs keep their content width and the
+strip scrolls rather than overlapping headings or splitting registration labels.
+The current-classes table scrolls horizontally on narrow screens, preserving
+readable column widths and single-line Edit/Delete actions with 44px touch targets.
 Date-navigation buttons and the date input share a 44px height and align along
 their bottom edges, with the input label above.
 The day timeline is keyboard-focusable and scrolls independently within 65% of

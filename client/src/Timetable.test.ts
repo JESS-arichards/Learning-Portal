@@ -69,10 +69,10 @@ describe('dated timetable', () => {
     const html = dated('2026-10-28');
     expect(html).toContain('<h2>Wednesday 28/10/2026</h2>');
     expect(html).not.toContain('Wednesday 2026-10-28');
-    expect(html).toContain('<strong class="day-tab-heading">Wed - 28/10</strong><small>0 periods</small>');
-    expect(html).toContain('<strong class="day-tab-heading">Mon - 26/10</strong>');
-    expect(html).toContain('<strong class="day-tab-heading">Fri - 30/10</strong>');
-    expect(html).not.toContain('<strong class="day-tab-heading">Sun - 01/11</strong>');
+    expect(html).toContain('<strong class="day-tab-heading"><span>Wed</span><span class="day-tab-separator"> - </span><time dateTime="2026-10-28">28/10</time></strong><small>0 periods</small>');
+    expect(html).toContain('<time dateTime="2026-10-26">26/10</time>');
+    expect(html).toContain('<time dateTime="2026-10-30">30/10</time>');
+    expect(html).not.toContain('<time dateTime="2026-11-01">');
     expect(html).not.toContain('<small>28/10</small>');
   });
   it('does not repeat a one-off lesson on the same weekday next week', () => {
@@ -83,11 +83,11 @@ describe('dated timetable', () => {
   });
   it('hides excluded days and orders Sunday-Thursday from the configured week boundary', () => {
     const html = dated('2026-10-28', {}, { years: [{ id: 'year', name: '2026/27', start: '2026-09-01', end: '2027-07-01', week: SUNDAY_TEACHING_WEEK }] });
-    expect(html).toContain('<strong class="day-tab-heading">Sun - 25/10</strong>');
-    expect(html.indexOf('Sun - 25/10')).toBeLessThan(html.indexOf('Mon - 26/10'));
-    expect(html).toContain('<strong class="day-tab-heading">Thu - 29/10</strong>');
-    expect(html).not.toContain('Fri - 30/10');
-    expect(html).not.toContain('Sat - 31/10');
+    expect(html).toContain('<time dateTime="2026-10-25">25/10</time>');
+    expect(html.indexOf('dateTime="2026-10-25"')).toBeLessThan(html.indexOf('dateTime="2026-10-26"'));
+    expect(html).toContain('<time dateTime="2026-10-29">29/10</time>');
+    expect(html).not.toContain('<time dateTime="2026-10-30">');
+    expect(html).not.toContain('<time dateTime="2026-10-31">');
   });
   it('shows holidays and outside-term dates without teaching periods or highlights', () => {
     const holiday = dated('2026-11-09');

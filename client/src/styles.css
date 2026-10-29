@@ -63,10 +63,15 @@ legend { padding: 0 8px; font-size: .9rem; }
 .pill { display: inline-flex; gap: 6px; align-items: center; padding: 6px 10px; font-size: .72rem; color: var(--text-muted); background: var(--surface-hover); border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; }
 .week-heading, .section-heading, .class-overview { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 23px; }
 .week-heading p { font-size: .83rem; margin-bottom: 0; }
+.timetable-area { min-width: 0; container-type: inline-size; }
 .day-tabs { display: flex; gap: 8px; padding: 8px; margin-bottom: 28px; background: var(--glass-bg); border: 1px solid var(--border); border-radius: 13px; overflow-x: auto; }
-.day-tabs button { flex: 1; min-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; padding: 12px 8px; border-radius: 8px; font-size: .88rem; }
-.day-tabs button small { font-size: .65rem; opacity: .8; max-width: 100%; overflow-wrap: anywhere; }
+.day-tabs button { flex: 1 0 auto; min-width: max-content; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; padding: 12px 8px; border-radius: 8px; font-size: .88rem; }
+.day-tabs button small { font-size: .65rem; opacity: .8; white-space: nowrap; }
 .day-tab-heading { font-weight: 700; white-space: nowrap; }
+@container (max-width: 600px) {
+  .day-tab-heading { display: flex; flex-direction: column; gap: 4px; }
+  .day-tab-separator { display: none; }
+}
 .day-tabs button.active { background: var(--brand); border-color: var(--brand-accent); color: var(--brand-foreground); font-weight: 650; box-shadow: 0 4px 16px #0002; }
 .day-tabs button:hover:not(.active) { background: #ffffff09; color: #fff; }
 .day-summary { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 22px; }
@@ -166,7 +171,11 @@ td { padding: 14px 12px; border-bottom: 1px solid var(--border); overflow-wrap: 
 .class-details { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
 .class-person-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 44px; gap: 12px; align-items: end; margin-bottom: 18px; }
 .class-person-row label { margin-bottom: 0; }
+.current-classes { min-width: 600px; }
+.current-classes th { white-space: nowrap; }
+.current-classes td { vertical-align: top; overflow-wrap: normal; }
 .class-actions { display: flex; gap: 16px; }
+.class-actions .text-button { flex-shrink: 0; min-width: 44px; min-height: 44px; white-space: nowrap; }
 .period-types { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
 .period-types li { display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .period-types li > div { min-width: 0; overflow-wrap: anywhere; }
