@@ -7,6 +7,7 @@ import { LessonTypeBadge } from './LessonTypeBadge';
 import { addDays, dayStatus, EMPTY_CALENDAR, schoolDate, weekday, timetableWeek } from '../../shared/calendar';
 import { DATE_DISPLAY_POLICY, formatDate } from '../../shared/dateFormatting';
 import teamsLogo from './assets/microsoft-teams.svg';
+import { AuthenticatedImage, ResourceLink } from './AuthenticatedResource';
 
 const schoolClock = new Intl.DateTimeFormat(DATE_DISPLAY_POLICY.locale, {
   timeZone: 'Asia/Dubai', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
@@ -49,9 +50,9 @@ export function Resources({ lesson, meetings = [] }: { lesson: Lesson; meetings?
             {link.kind === 'teams' ? <img className="teams-logo" src={teamsLogo} alt="Microsoft Teams" /> : <ExternalLink size={18} aria-hidden="true" />}
             <span>{link.name}</span><small>{link.kind === 'teams' ? 'Join Teams' : 'Open link'}</small>
           </a>)}
-          {files.map((file) => <a key={file.id} className="btn secondary resource file" href={`/api/lessons/${lesson.id}/files/${file.id}`}>
+          {files.map((file) => <ResourceLink key={file.id} className="btn secondary resource file" href={`/api/lessons/${lesson.id}/files/${file.id}`} fileName={file.name}>
             <FileDown size={18} aria-hidden="true" /><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small>
-          </a>)}
+          </ResourceLink>)}
           {liveMeetings.map((meeting) => {
             const occurrence = lesson.occurrences?.find((item) => item.id === meeting.occurrenceId);
             return <a key={meeting.occurrenceId} className="btn secondary resource teams" href={meeting.joinUrl!} target="_blank" rel="noopener noreferrer">
@@ -87,12 +88,12 @@ export function LessonImages({ lessonId, images }: { lessonId: string; images: L
   }}>
     <figure>
       {failedImageId === image.id ? <p role="alert">This image could not be loaded. Try reopening the dialog or download the image below.</p>
-        : <img key={image.id} src={`/api/lessons/${lessonId}/files/${image.id}?preview=1`} alt={image.name} onError={() => setFailedImageId(image.id)} />}
+        : <AuthenticatedImage key={image.id} src={`/api/lessons/${lessonId}/files/${image.id}?preview=1`} alt={image.name} onError={() => setFailedImageId(image.id)} />}
       <figcaption aria-live="polite" aria-atomic="true">{selectedIndex + 1} of {images.length}: {image.name}</figcaption>
     </figure>
     <div className="lesson-image-controls">
       <button type="button" className="btn secondary" aria-label="Previous image" disabled={images.length < 2} onClick={() => move(-1)}><ChevronLeft size={18} aria-hidden="true" />Previous</button>
-      <a className="btn secondary" href={`/api/lessons/${lessonId}/files/${image.id}`}><FileDown size={18} aria-hidden="true" />Download</a>
+      <ResourceLink className="btn secondary" href={`/api/lessons/${lessonId}/files/${image.id}`} fileName={image.name}><FileDown size={18} aria-hidden="true" />Download</ResourceLink>
       <button type="button" className="btn secondary" aria-label="Next image" disabled={images.length < 2} onClick={() => move(1)}>Next<ChevronRight size={18} aria-hidden="true" /></button>
     </div>
   </section>;

@@ -33,4 +33,21 @@ describe('shared Applications Portal links', () => {
     expect(group && 'children' in group && group.children.map((child) => child.id)).toEqual(['timetable']);
     expect(ordinary.map((item) => item.id)).toEqual(['home', 'streaming', 'learning']);
   });
+  it('includes the Communication link when enabled without changing menus that omit it', () => {
+    const options = { staff: false, trips: false, absence: false, tasks: false, learning: false, learningAdmin: false };
+    const communication = portalMenu({ ...options, communication: true }).find((item) => item.id === 'communication');
+    expect(communication).toEqual({
+      id: 'communication', label: 'Communication', icon: 'communication', path: '/communication', application: 'apps',
+    });
+    expect(portalMenu(options).some((item) => item.id === 'communication')).toBe(false);
+  });
+  it('carries Teams mode across application origins while leaving local routes unchanged', () => {
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, {
+      items, application: 'apps', portalUrl: 'https://appsdev.jess.sch.ae', learningUrl: 'https://learndev.jess.sch.ae', teams: true,
+    }))));
+    expect(html).toContain('href="https://learndev.jess.sch.ae/?teams=1"');
+    expect(html).toContain('href="https://learndev.jess.sch.ae/classes?teams=1"');
+    expect(html).toContain('href="https://learndev.jess.sch.ae/admin?teams=1"');
+    expect(html).toContain('href="/streaming"');
+  });
 });

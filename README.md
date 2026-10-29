@@ -116,7 +116,45 @@ Calendar edits that would change existing occurrences are rejected. Reschedule o
 remove affected lessons first. Period templates used by any occurrence are locked.
 Date-aware conflict checks protect shared classes, teachers and students.
 
-## Teacher-owned Teams meetings
+## Microsoft Teams
+
+Embedded access from the Portal Teams app is separate from creating lesson meetings.
+See the following section for its authentication and package requirements.
+
+### Embedded Learning in the Portal Teams app
+
+Deploy the companion Applications-Portal Teams PKCE handoff before enabling
+`TEAMS_ENABLED=true` on this Learning Web App. The flag defaults to false. It allows
+framing only by the Microsoft Teams/cloud host allowlist and removes the conflicting
+`SAMEORIGIN` header; other sites are not allowed to embed Learning.
+
+Regenerate the Portal Teams ZIP with `--learning-url` set to this environment's
+Learning origin, keep the existing Teams app ID and increase the package version.
+Publish/update the package through Teams admin management. Both the Portal and Learning
+hostnames must be in `validDomains`; a web deployment alone cannot update an installed
+Teams manifest. Use separate environment-specific packages and matching Portal/Learning URLs.
+
+Learning links carry `?teams=1`. The Learning client verifies and initializes its
+actual Teams host, keeps a PKCE verifier/state in tab-local session storage, and visits
+the Portal's `/learning-signin` page. That page uses the existing Portal Teams bearer
+session to authorize a single-use code; impersonation must be stopped first.
+Learning redeems the code server-to-server and issues its own transport-bound bearer
+session. Session tokens/verifiers are never put in navigation URLs. Teams mode does
+not rely on third-party cookies or request a new Microsoft token for the Learning domain.
+JSON requests, avatar/image previews, uploads and file downloads use the Learning
+bearer header. Live central status/session-version checks still revoke access.
+
+Browser/mobile-browser visits retain the existing HttpOnly, Secure, SameSite=Lax
+cookie sign-in. Existing cookies remain valid; Teams bearer tokens are not accepted
+as browser cookies or vice versa. `TEAMS_ENABLED` requires no additional Entra
+credentials and does not enable/disable lesson meeting creation.
+
+Validate in the actual updated Teams app with third-party cookies blocked: open
+timetable, classes and admin (according to roles), load an avatar and lesson image,
+download/upload a file, return to Portal, reload a deep link, and test expired
+sessions and a disabled user. Repeat ordinary browser sign-in to check it is unchanged.
+
+### Teacher-owned lesson meetings
 
 On the existing Entra app registration, add Microsoft Graph **Application**
 permissions `Calendars.ReadWrite` and `OnlineMeetings.ReadWrite.All` and grant

@@ -8,6 +8,7 @@ export const environmentSchema = z.object({
   APPLICATIONS_PORTAL_URL: z.url(),
   PLATFORM_API_KEY: z.string().min(32),
   SESSION_SECRET: z.string().min(32),
+  TEAMS_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
   SQL_CONNECTION_STRING: optional,
   SQL_SERVER: optional, SQL_DATABASE: optional, SQL_USER: optional,
   SQL_PASSWORD: z.string().optional().transform((v) => v || undefined),

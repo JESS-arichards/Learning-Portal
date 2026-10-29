@@ -55,10 +55,15 @@ export function createApp(readiness: { ready: boolean } = { ready: true }) {
     contentSecurityPolicy: { directives: {
       'connect-src': ["'self'"],
       'frame-src': ["'none'"],
-      'img-src': ["'self'", new URL(config.APPLICATIONS_PORTAL_URL).origin, 'data:'],
+      'frame-ancestors': ["'self'", ...(config.TEAMS_ENABLED ? [
+        'https://teams.microsoft.com', 'https://*.teams.microsoft.com', 'https://*.cloud.microsoft',
+      ] : [])],
+      'img-src': ["'self'", new URL(config.APPLICATIONS_PORTAL_URL).origin, 'data:', ...(config.TEAMS_ENABLED ? ['blob:'] : [])],
       'upgrade-insecure-requests': config.production ? [] : null,
     } },
     strictTransportSecurity: config.production,
+    frameguard: config.TEAMS_ENABLED ? false : { action: 'sameorigin' },
+    crossOriginOpenerPolicy: { policy: config.TEAMS_ENABLED ? 'same-origin-allow-popups' : 'same-origin' },
   }));
   app.use(cookieParser());
   app.use(express.json({ limit: '300kb' }));
