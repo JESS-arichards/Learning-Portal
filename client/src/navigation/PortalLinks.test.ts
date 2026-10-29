@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import { portalMenu } from '../../../shared/portalMenu';
+import { navigationSchema } from '../../../shared/learning';
 import { PortalLinks, type PortalLinksProps } from './PortalLinks';
 
 const items = portalMenu({ staff: true, trips: true, absence: true, tasks: true, learning: true, learningAdmin: true });
@@ -40,6 +41,13 @@ describe('shared Applications Portal links', () => {
       id: 'communication', label: 'Communication', icon: 'communication', path: '/communication', application: 'apps',
     });
     expect(portalMenu(options).some((item) => item.id === 'communication')).toBe(false);
+  });
+  it('accepts every link the central menu can produce in the navigation contract', () => {
+    const all = portalMenu({ staff: true, trips: true, absence: true, tasks: true, communication: true, learning: true, learningAdmin: true });
+    const result = navigationSchema.safeParse({
+      items: all, portalUrl: 'https://apps.example.org', learningUrl: 'https://learn.example.org', adminUrl: null, parkingReleaseUrl: null, parkingBay: null,
+    });
+    expect(result.success).toBe(true);
   });
   it('carries Teams mode across application origins while leaving local routes unchanged', () => {
     const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, {
