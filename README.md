@@ -60,22 +60,31 @@ use a **private Azure Blob Storage container**.
 
 ## What is included
 
-- All users sign in **on Applications Portal**, not in Learning. Staff/students use
-  the Portal's Microsoft Entra sign-in; parents use its email one-time-code sign-in.
+- Eligible users sign in **on Applications Portal**, not in Learning. Learn admits
+  **Staff**, **Students** whose department is exactly **Jumeirah Student** or
+  **Primary Student**, and **Full Admin**. Department matching ignores case and
+  surrounding spaces. Learn Admin and legacy Learn User alone do not grant entry;
+  parents without another eligible role cannot enter, even with linked children.
+  Staff/students use the Portal's Microsoft Entra sign-in.
   Learning redirects unauthenticated visitors there and restores the requested Learning
   page after successful sign-in. An existing Portal session skips the login form.
   Independent Learning cookies never share Portal session tokens.
 - Students land on their dated timetable, including breaks, lesson descriptions,
   downloadable files, external resources and Microsoft Teams links.
-- Parents select an attached child in the left-hand list to see that child's timetable
-  on the right. Small screens stack the child selector above the timetable.
+- Existing linked-child visibility rules remain for accounts that also meet Learn
+  eligibility; a parent relationship is not a feature-access grant.
 - Assigned teachers manage lessons and view their class rosters. A lesson can occupy
   one or more periods on a teaching date, once, daily or weekly within a term.
-- **Learn Admin** and **Full Admin** can import classes, maintain weekly day structures,
+- Eligible **Learn Admin** users and **Full Admin** can import classes, maintain weekly day structures,
   and manage all learning classes and lessons. Unassigned staff can sign in but cannot
   manage someone else's class.
 - Central Full Admins continue to administer users, activation, roles and parent links
   in Applications Portal. Learning does not create another user database or role editor.
+- Learn eligibility is checked at session issuance and on every browser/Teams API
+  request, including files and lesson-meeting routes. Live central role/department
+  changes take effect on the next request. Navigation reflects the same centrally
+  enforced feature policy rather than acting as the access boundary. Deploy central
+  Portal profile/policy updates before Learning; a missing student department denies entry.
 
 ## Academic calendar and dated lessons
 

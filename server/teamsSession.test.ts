@@ -48,6 +48,31 @@ async function login() {
   return String((await response.json()).sessionToken);
 }
 describe('cookie-free Learning sessions in Teams', () => {
+  it.each([
+    { roles: ['Parent'], department: 'Primary Student' },
+    { roles: ['Learn Admin'], department: null },
+    { roles: ['Learn User'], department: null },
+    { roles: ['Student'], department: 'Secondary Student' },
+    { roles: ['Student'], department: null },
+  ])('denies session issuance and revokes existing browser/Teams access for ineligible $roles / $department', async (changes) => {
+    const token = await login();
+    const browser = await fetch(`${url}/browser-login`);
+    const cookie = browser.headers.get('set-cookie')!.split(';')[0];
+    mocks.getUser.mockResolvedValue({ ...user, ...changes });
+    expect((await fetch(`${url}/me`, { headers: { Cookie: cookie } })).status).toBe(403);
+    expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(403);
+    mocks.platform.mockResolvedValue({ ...user, ...changes });
+    expect((await post('redeem', { code: 'c'.repeat(43), codeVerifier: 'v'.repeat(43) })).status).toBe(403);
+  });
+  it.each(['Jumeirah Student', 'Primary Student'])('rechecks student department %s on every request', async (department) => {
+    const student = { ...user, roles: ['Student'], department };
+    mocks.platform.mockResolvedValue(student);
+    mocks.getUser.mockResolvedValue(student);
+    const token = await login();
+    expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200);
+    mocks.getUser.mockResolvedValue({ ...student, department: 'Secondary Student' });
+    expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(403);
+  });
   it('starts the existing PKCE flow with a fixed Teams callback and no transaction cookie', async () => {
     const input = { state: 's'.repeat(43), codeChallenge: 'p'.repeat(43) };
     const response = await post('start', input);

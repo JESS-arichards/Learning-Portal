@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { getUser } from './platform.js';
 import { HttpError } from './errors.js';
 import { isAdmin, type User } from '../shared/learning.js';
+import { canUseLearning } from '../shared/learningAccess.js';
 
 declare global {
   namespace Express { interface Request { user?: User } }
@@ -13,6 +14,7 @@ const cookie = 'learning_session';
 const cookieOptions = { httpOnly: true, secure: config.production, sameSite: 'lax' as const, path: '/' };
 async function sessionToken(user: User, transport: 'browser' | 'teams') {
   if (!user.isActive) throw new HttpError(403, 'Your account is disabled.');
+  if (!canUseLearning(user)) throw new HttpError(403, 'You do not have access to the Learning Portal.');
   return new SignJWT({ sv: user.sessionVersion, transport })
     .setProtectedHeader({ alg: 'HS256' }).setSubject(String(user.id))
     .setIssuer('learning-portal').setAudience('learning-portal').setIssuedAt().setExpirationTime('8h').sign(key);
@@ -52,6 +54,7 @@ export async function requireUser(req: Request, _res: Response, next: NextFuncti
   try { user = await getUser(id); }
   catch (error) { if (error instanceof HttpError && error.status === 404) throw new HttpError(401, 'Account no longer exists.'); throw error; }
   if (!user.isActive || user.sessionVersion !== version) throw new HttpError(401, 'Account changed. Please sign in again.');
+  if (!canUseLearning(user)) throw new HttpError(403, 'You do not have access to the Learning Portal.');
   req.user = user;
   next();
 }

@@ -13,6 +13,7 @@ import { Avatar } from './Avatar';
 import { SupportInfoButton } from './navigation/SupportInfoButton';
 import { clearTeamsSession, initializeTeamsSession, usesTeamsSession } from './teamsSession';
 import { completeTeamsSignIn, startTeamsSignIn } from './teamsSignIn';
+import { canUseLearning } from '../../shared/learningAccess';
 
 type LearningData = Snapshot & { children: Student[] };
 export function App() {
@@ -54,7 +55,7 @@ export function App() {
       const currentNavigation = await api<PortalNavigation>('/navigation');
       setUser(current); setData(next); setConfig(currentConfig); setNavigation(currentNavigation); setError('');
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) { setUser(null); setData(null); }
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) { setUser(null); setData(null); }
       setError(errorMessage(error)); throw error;
     }
   }, []);
@@ -80,6 +81,7 @@ export function App() {
   if (loading) return <main className="loading-screen" role="status"><BookOpen size={34} /><p>Opening your Learning Portal...</p></main>;
   if (!config || !navigation) return <main className="loading-screen"><BookOpen size={34} /><h1>Learning Portal unavailable</h1><p role="alert" className="alert error">{error}</p><button className="btn primary" onClick={() => void bootstrap()}>Try again</button></main>;
   if (!user) return <main className="loading-screen"><p role="alert">{error || 'Please sign in again.'}</p><button className="btn primary" onClick={usesTeamsSession() ? () => void bootstrap() : redirectToSignIn}>Continue to sign in</button></main>;
+  if (!canUseLearning(user)) return <main className="loading-screen"><p role="alert">You do not have access to the Learning Portal.</p></main>;
   const manager = user.roles.includes('Staff') || isAdmin(user) || data?.classes.some((c) => canManage(user, c));
   const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} />;
   return <BrowserRouter>

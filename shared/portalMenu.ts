@@ -35,7 +35,7 @@ export function desktopPortalMenu(items: PortalMenuItem[], roles: readonly strin
 
 export function portalMenu(options: {
   staff: boolean; trips: boolean; absence: boolean; tasks: boolean; learning: boolean; learningAdmin: boolean;
-  communication?: boolean;
+  communication?: boolean; parking?: boolean;
 }): PortalMenuItem[] {
   const link = (id: MenuIcon, label: string, path: string, application: 'apps' | 'learn' = 'apps'): PortalLink => ({
     id, label, icon: id, path, application,
@@ -52,7 +52,7 @@ export function portalMenu(options: {
         ...(options.learningAdmin ? [link('admin', 'Learning Portal admin', '/admin', 'learn')] : []),
       ],
     }] : []),
-    ...(options.staff ? [link('parking', 'Parking', '/parking')] : []),
+    ...((options.parking ?? options.staff) ? [link('parking', 'Parking', '/parking')] : []),
     ...(options.trips ? [link('trips', 'Trip Communicator', '/trips')] : []),
     ...(options.absence ? [link('absence', 'Staff Absence', '/staff-absence')] : []),
     ...(options.tasks ? [link('tasks', 'Task Tracking', '/tasks')] : []),
