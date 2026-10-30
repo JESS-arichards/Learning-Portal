@@ -15,8 +15,11 @@ the day and date stack on separate lines. Tabs keep their content width and the
 strip scrolls rather than overlapping headings or splitting registration labels.
 The current-classes table scrolls horizontally on narrow screens, preserving
 readable column widths and single-line Edit/Delete actions with 44px touch targets.
-Date-navigation buttons and the date input share a 44px height and align along
-their bottom edges, with the input label above.
+Timetable navigation offers Previous week, Today and Next week; dates are shown on
+the day tabs rather than in a separate date picker. All terms for the displayed
+academic year appear in date order in a left-aligned, wrapping row at every screen
+size. Today's term has the same #FF8200 border colour as the current period;
+outside a term none is highlighted.
 The day timeline is keyboard-focusable and scrolls independently within 65% of
 the viewport height. On opening a day or entering a new period it positions the
 current period at the top, retaining all earlier/later periods for manual scrolling.
@@ -29,9 +32,12 @@ The selected-day heading uses UK dates, for example "Wednesday 28/10/2026".
 On screens up to 600px wide, the shared navigation title wraps rather than
 truncating. The logo is capped at 80px wide and information/menu controls retain
 their touch targets. Longer titles can increase the header height.
-Period configuration stacks fields on narrow phones and places save/delete actions
-on their own row, preventing native time inputs from overlapping action buttons.
-On screens up to 900px wide, the new-period Days selector occupies a full row below
+Period configuration uses two columns when its panel content is at most 1000px wide
+(including when the desktop sidebar reduces the available space), stacks fields on
+narrow phones and places save/delete actions on their own row. Form controls
+are constrained to their columns, including native date/time controls in lesson
+scheduling, preventing overlapping fields and buttons.
+In this two-column layout, the new-period Days selector occupies a full row below
 the time fields, and its dropdown stays within that row's width.
 Mobile period-type cards share equal widths and heights, with aligned 44px edit/delete
 buttons and wrapping names so longer labels do not change the card alignment.

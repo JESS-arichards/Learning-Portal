@@ -119,6 +119,9 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
   const day = dated ? weekday(date) : legacyDay;
   const calendar = data.calendar ?? EMPTY_CALENDAR;
   const status = dayStatus(calendar, date);
+  const year = calendar.years.find((year) => year.start <= date && date <= year.end);
+  const terms = calendar.terms.filter((term) => term.yearId === year?.id).sort((a, b) => a.start.localeCompare(b.start));
+  const currentTerm = dayStatus(calendar, clock.date).term;
   const weekDates = dated ? timetableWeek(calendar, date) : [];
   useEffect(() => {
     const timer = setInterval(() => {
@@ -170,10 +173,14 @@ export function Timetable({ data, user, children }: { data: Snapshot; user: User
       </aside>}
       <section className="timetable-area" aria-label={parentView ? `${selected?.displayName ?? 'Child'} timetable` : 'My timetable'}>
         {parentView && selected && <div className="child-heading"><span className="initials">{selected.displayName[0]}</span><div><h2>{selected.displayName}</h2><span className="muted">{dated ? 'Dated learning timetable' : 'Weekly learning timetable'}</span></div></div>}
-        <div className="week-heading"><div><h2>{dated ? 'Your learning calendar' : 'Your weekly rhythm'}</h2><p className="muted">{dated ? 'Dated lessons follow school terms and holidays.' : 'Legacy weekly view. An administrator must configure the academic calendar for dated lessons.'}</p></div><span className="pill"><Clock3 size={14} /> {dated ? status.term?.name ?? 'Outside term' : 'Weekly timetable'}</span></div>
+        <div className="week-heading timetable-heading"><div><h2>{dated ? 'Your learning calendar' : 'Your weekly rhythm'}</h2><p className="muted">{dated ? 'Dated lessons follow school terms and holidays.' : 'Legacy weekly view. An administrator must configure the academic calendar for dated lessons.'}</p></div>
+          <div className="timetable-terms" aria-label={year ? `${year.name} terms` : 'Timetable terms'}>
+            {dated && terms.length ? terms.map((term) => <span key={term.id} className={`pill${term.id === currentTerm?.id ? ' current-term' : ''}`} aria-current={term.id === currentTerm?.id ? 'date' : undefined}><Clock3 size={14} aria-hidden="true" />{term.name}</span>)
+              : <span className="pill"><Clock3 size={14} aria-hidden="true" />{dated ? 'Outside term' : 'Weekly timetable'}</span>}
+          </div>
+        </div>
         {dated && <div className="date-navigation">
           <button className="btn secondary" onClick={() => setDate(addDays(date, -7))}>Previous week</button>
-          <label>Timetable date<input type="date" required value={date} onChange={(event) => { if (event.target.value) setDate(event.target.value); }} /></label>
           <button className="btn secondary" onClick={() => setDate(schoolDate())}>Today</button>
           <button className="btn secondary" onClick={() => setDate(addDays(date, 7))}>Next week</button>
         </div>}
