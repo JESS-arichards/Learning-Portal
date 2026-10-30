@@ -114,7 +114,7 @@ export function DayStructure({ data, refresh }: { data: Snapshot; refresh: () =>
     } catch (error) { setError(errorMessage(error)); }
     finally { saving.current = false; setBusy(false); }
   }
-  return <section className="panel">
+  return <section className="panel day-structure">
     <div className="section-heading"><div><p className="eyebrow">WEEKLY SCHEDULE</p><h2>Build the school day</h2></div><Clock3 size={24} /></div>
     <p className="muted">Set periods in school local time. Periods used by timetable lessons are locked against all edits and deletion. Remove or reschedule those lessons first.</p>
     <div className="section-heading"><h3>Period types</h3><button type="button" className="btn secondary" disabled={busy || periodTypes.length >= 30} onClick={() => {

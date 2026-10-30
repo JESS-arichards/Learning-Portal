@@ -79,6 +79,40 @@ describe('dated timetable', () => {
     expect(html).not.toContain('<time dateTime="2026-11-01">');
     expect(html).not.toContain('<small>28/10</small>');
   });
+  it('keeps week navigation without a redundant date picker', () => {
+    const html = dated('2026-10-28');
+    expect(html).toContain('Previous week');
+    expect(html).toContain('Today');
+    expect(html).toContain('Next week');
+    expect(html).not.toContain('Timetable date');
+    expect(html).not.toContain('type="date"');
+  });
+  const terms = [
+    { id: 'summer', yearId: 'year', name: 'Summer', start: '2027-04-12', end: '2027-07-01' },
+    { id: 'other', yearId: 'other-year', name: 'Another year', start: '2027-09-01', end: '2027-12-10' },
+    { id: 'term', yearId: 'year', name: 'Autumn', start: '2026-09-01', end: '2026-12-11' },
+    { id: 'spring', yearId: 'year', name: 'Spring', start: '2027-01-04', end: '2027-03-26' },
+  ];
+  it('lists every term in the displayed academic year in date order and highlights today’s term', () => {
+    const html = dated('2026-10-28', {}, { terms });
+    expect(html).toContain('aria-label="2026/27 terms"');
+    expect(html).toContain('class="pill current-term" aria-current="date"');
+    expect(html.match(/class="pill current-term"/g)).toHaveLength(1);
+    expect(html.indexOf('Autumn')).toBeLessThan(html.indexOf('Spring'));
+    expect(html.indexOf('Spring')).toBeLessThan(html.indexOf('Summer'));
+    expect(html).not.toContain('Another year');
+  });
+  it('shows all year terms with no current-term border between terms', () => {
+    const html = dated('2026-12-14', {}, { terms });
+    for (const name of ['Autumn', 'Spring', 'Summer']) expect(html).toContain(name);
+    expect(html).not.toContain('current-term');
+  });
+  it('handles dates outside academic years without displaying unrelated terms', () => {
+    const html = dated('2027-08-02', {}, { terms });
+    expect(html).toContain('Outside term');
+    for (const name of ['Autumn', 'Spring', 'Summer', 'Another year']) expect(html).not.toContain(name);
+    expect(html).not.toContain('current-term');
+  });
   it('does not repeat a one-off lesson on the same weekday next week', () => {
     const html = dated('2026-11-02');
     expect(html).not.toContain('Fractions');
