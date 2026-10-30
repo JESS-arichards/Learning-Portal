@@ -110,6 +110,21 @@ describe('shared navigation', () => {
     expect(find(tree, (props) => props.className === 'jess-nav-sidebar')).toBeNull();
     expect(renderToStaticMarkup(find(tree, (props) => props.className === 'jess-nav-links'))).toContain('href="/lessons"');
   });
+  it('keeps the right-hand controls and mobile panel identical when returning to full-width top navigation', () => {
+    const sidebar = NavigationBar({ ...defaults, desktopSidebar: true });
+    const controls = renderToStaticMarkup(find(sidebar, (props) => props.className === 'jess-nav-controls'));
+    state.index = 0;
+    const top = NavigationBar({ ...defaults, desktopFullWidth: true });
+    expect(renderToStaticMarkup(find(top, (props) => props.className === 'jess-nav-controls'))).toBe(controls);
+    expect(top.props.className).toContain('jess-navigation--full-width');
+    expect(top.props.className).not.toContain('jess-navigation--sidebar');
+    expect(find(top, (props) => props.className === 'jess-nav-sidebar')).toBeNull();
+    state.index = 0; state.mobile = true;
+    const originalMobile = renderToStaticMarkup(find(NavigationBar({ ...defaults, desktopSidebar: true }), (props) => props.className === 'jess-nav-mobile'));
+    state.index = 0;
+    const topMobile = renderToStaticMarkup(find(NavigationBar({ ...defaults, desktopFullWidth: true }), (props) => props.className === 'jess-nav-mobile'));
+    expect(topMobile).toBe(originalMobile);
+  });
   it('orders info, avatar and three dots and keeps account links out of application navigation', () => {
     const html = renderToStaticMarkup(createElement(NavigationBar, { ...defaults, adminUrl: '/admin' }));
     expect(html.indexOf('aria-label="Application information"')).toBeLessThan(html.indexOf('aria-label="Account manager for'));
