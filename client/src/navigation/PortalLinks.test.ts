@@ -44,7 +44,7 @@ describe('shared Applications Portal links', () => {
     const admin = portalMenu({ staff: false, trips: true, absence: false, tasks: true, learning: true, learningAdmin: true, communication: true });
     expect(desktopPortalMenu(admin, ['Full Admin']).map((item) => item.id)).toEqual(['home', 'streaming', 'learning', 'communication', 'trips', 'tasks']);
   });
-  it('renders closed desktop dropdowns with matching controls and keeps the mobile menu ungrouped', () => {
+  it('uses the same role groups and options in desktop dropdowns and mobile accordions', () => {
     const props: PortalLinksProps = {
       items, application: 'apps', portalUrl: 'https://appsdev.jess.sch.ae', learningUrl: 'https://learndev.jess.sch.ae',
       roles: ['Staff', 'Parent'],
@@ -59,9 +59,28 @@ describe('shared Applications Portal links', () => {
     expect(desktop).toContain('href="/parking"');
     const mobile = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, props))));
     expect(mobile).toContain('jess-nav-group-toggle');
-    expect(mobile).toContain('Learning Portal');
+    expect(mobile).toContain('title="Learn"');
     expect(mobile).not.toContain('jess-nav-top-group');
-    expect(mobile).not.toContain('>Staff<');
+    expect(mobile).toContain('title="Staff"');
+    for (const item of ['Parking', 'Trip Communicator', 'Staff Absence', 'Task Tracking']) {
+      expect(mobile).toContain(`title="${item}"`);
+      expect(desktop).toContain(`title="${item}"`);
+    }
+    expect(mobile).not.toContain('title="Parent"');
+  });
+  it.each(['apps', 'learn'] as const)('renders the same Parent options on mobile and desktop in %s', (application) => {
+    const props: PortalLinksProps = {
+      items: portalMenu({ staff: false, trips: true, absence: false, tasks: false, learning: false, learningAdmin: false }),
+      application, portalUrl: 'https://appsdev.jess.sch.ae', learningUrl: 'https://learndev.jess.sch.ae', roles: ['Parent'],
+    };
+    for (const desktop of [false, true]) {
+      const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, { ...props, desktop }))));
+      expect(html).toContain(desktop ? '>Parent<' : 'title="Parent"');
+      expect(html).toContain('title="Trip Communicator"');
+      expect(html).not.toContain('title="Parking"');
+      expect(html).not.toContain('title="Task Tracking"');
+      expect(html).toMatch(/aria-expanded="false" aria-controls="/);
+    }
   });
   it('keeps Learning links local and Portal links external in desktop groups, including Teams mode', () => {
     const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, {
