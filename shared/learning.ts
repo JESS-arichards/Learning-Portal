@@ -21,6 +21,7 @@ export const userSchema = personSchema.extend({
   isActive: z.boolean(),
   sessionVersion: z.number().int().nonnegative(),
   roles: z.array(z.string()),
+  department: z.string().nullable().optional(),
   studentEmails: z.array(emailSchema),
   hasAvatar: z.boolean().optional(),
   avatarVersion: z.string().nullable().optional(),

@@ -18,7 +18,7 @@ import { errorHandler } from './errors.js';
 import { platform } from './platform.js';
 
 let server: Server, url: string;
-const student = { id: 20, displayName: 'Student', email: 'student@school.test', isActive: true, sessionVersion: 1, roles: ['Student'], studentEmails: [] };
+const student = { id: 20, displayName: 'Student', email: 'student@school.test', isActive: true, sessionVersion: 1, roles: ['Student'], department: 'Jumeirah Student', studentEmails: [] };
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(platform).mockImplementation(async (path) => path === '/learning/sso/start'

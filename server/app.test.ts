@@ -28,7 +28,10 @@ import { academicCalendarSchema, SUNDAY_TEACHING_WEEK, DEFAULT_TEACHING_WEEK } f
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const person = (id: number) => ({ id, email: `user${id}@school.test`, displayName: `User ${id}` });
-const user = (id: number, roles: string[], studentEmails: string[] = []): User => ({ ...person(id), roles, studentEmails, isActive: true, sessionVersion: 0 });
+const user = (id: number, roles: string[], studentEmails: string[] = []): User => ({
+  ...person(id), roles, studentEmails, department: roles.includes('Student') ? 'Primary Student' : null,
+  isActive: true, sessionVersion: 0,
+});
 const seed: Snapshot = {
   lessonTypes: [{ id: uuid(90), name: 'Seesaw', colour: '#FFC83D', icon: null }],
   calendar: {
@@ -102,6 +105,31 @@ beforeEach(async () => {
 });
 
 describe('authenticated learning API', () => {
+  it.each([
+    { roles: ['Parent'], department: 'Primary Student' },
+    { roles: ['Learn Admin'], department: null },
+    { roles: ['Learn User'], department: null },
+    { roles: ['Student'], department: 'Secondary Student' },
+    { roles: ['Student'], department: null },
+  ])('blocks direct data, administration and resource requests for ineligible $roles / $department', async (changes) => {
+    current = { ...user(20, changes.roles), ...changes };
+    for (const path of ['/me', '/navigation', '/learning', `/lessons/${uuid(6)}/files/${uuid(7)}`]) {
+      expect((await call(path)).status).toBe(403);
+    }
+    expect((await call('/admin/structure', 'PUT', seed.slots)).status).toBe(403);
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(readFileContent).not.toHaveBeenCalled();
+    expect(saveStructure).not.toHaveBeenCalled();
+  });
+  it.each(['Jumeirah Student', 'Primary Student'])('revokes %s access immediately when its department changes', async (department) => {
+    current = { ...user(20, ['Student']), department };
+    expect((await call('/learning')).status).toBe(200);
+    vi.mocked(snapshot).mockClear();
+    current.department = 'Secondary Student';
+    expect((await call('/learning')).status).toBe(403);
+    expect((await call(`/lessons/${uuid(6)}/files/${uuid(7)}`)).status).toBe(403);
+    expect(snapshot).not.toHaveBeenCalled();
+  });
   it('only allows Teams framing when explicitly enabled and retains the browser default otherwise', async () => {
     const ordinary = await call('/live');
     expect(ordinary.headers.get('x-frame-options')).toBe('SAMEORIGIN');
@@ -122,7 +150,7 @@ describe('authenticated learning API', () => {
     expect(embedded.headers.get('content-security-policy')).toContain("img-src 'self' http://localhost:8080 data: blob:");
   });
   it.each(['Full Admin', 'Learn Admin'])('allows %s to create, edit and delete unused lesson types', async (role) => {
-    current = user(10, [role]);
+    current = user(10, ['Staff', role]);
     const input = { name: 'Workshop', colour: '#FFC83D', icon: 'pencil' };
     const response = await call('/admin/lesson-types', 'POST', input);
     expect(response.status).toBe(200);
@@ -145,7 +173,7 @@ describe('authenticated learning API', () => {
     expect(remove).not.toHaveBeenCalled();
   });
   it('validates type configuration and prevents deletion of a used type', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const input = { name: 'Workshop', colour: '#FFC83D', icon: null };
     for (const change of [{ name: '' }, { colour: 'red' }, { icon: 'invalid' }]) {
       expect((await call('/admin/lesson-types', 'POST', { ...input, ...change })).status).toBe(400);
@@ -401,7 +429,7 @@ describe('authenticated learning API', () => {
     students: [{ displayName: 'Pending Student', email: 'pending@school.test' }],
   };
   it.each(['Learn Admin', 'Full Admin'])('validates and creates a manual class with pending students as %s', async (role) => {
-    current = user(10, [role]);
+    current = user(10, ['Staff', role]);
     const preview = await call('/admin/classes/validate', 'POST', manual);
     expect(preview.status).toBe(200);
     const details = await preview.json();
@@ -425,7 +453,7 @@ describe('authenticated learning API', () => {
     expect(save).not.toHaveBeenCalled();
   });
   it('updates all class details while retaining the class ID, lessons and files', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     vi.mocked(findUsers).mockImplementation(async (emails) => [user(11, ['Staff']), user(22, ['Student'])].filter((u) => emails.includes(u.email)));
     const input = {
       name: 'Renamed Maths', yearGroup: '9', division: 'Primary',
@@ -446,7 +474,7 @@ describe('authenticated learning API', () => {
     expect((await (await call('/learning')).json()).lessons).toEqual(seed.lessons);
   });
   it('rejects duplicate class identity and unknown edit IDs without overwriting classes', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const duplicate = { ...manual, name: ' MATHS ', yearGroup: '7', division: 'secondary' };
     expect((await call('/admin/classes', 'POST', duplicate)).status).toBe(409);
     expect((await call(`/admin/classes/${uuid(2)}`, 'PUT', duplicate)).status).toBe(409);
@@ -455,7 +483,7 @@ describe('authenticated learning API', () => {
     expect(state.classes).toEqual(seed.classes);
   });
   it('revalidates staff and student accounts on save, rejecting invalid or duplicate rosters', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/classes/validate', 'POST', manual)).status).toBe(200);
     vi.mocked(findUsers).mockResolvedValue([{ ...user(10, ['Staff']), isActive: false }]);
     expect((await call('/admin/classes', 'POST', manual)).status).toBe(400);
@@ -467,7 +495,7 @@ describe('authenticated learning API', () => {
     expect(save).not.toHaveBeenCalled();
   });
   it.each(['teacher', 'student'])('rejects roster edits that cause a shared %s timetable clash', async (shared) => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     state.lessons.push({ ...seed.lessons[0], id: uuid(90), classId: uuid(2) });
     vi.mocked(findUsers).mockImplementation(async (emails) => [user(10, ['Staff']), user(11, ['Staff']), user(22, ['Student'])].filter((u) => emails.includes(u.email)));
     const input = { ...manual, teachers: [person(shared === 'teacher' ? 11 : 10)], students: shared === 'student' ? [person(22)] : manual.students };
@@ -530,11 +558,11 @@ describe('authenticated learning API', () => {
     expect(data.classes).toHaveLength(1);
     expect(data.classes[0].students).toEqual([person(20)]);
   });
-  it('returns attached children, and live link removal removes timetable access', async () => {
+  it('denies Parent-only users even with linked children', async () => {
     current = user(99, ['Parent'], [person(20).email]);
-    expect((await (await call('/learning')).json()).children).toEqual([person(20)]);
+    expect((await call('/learning')).status).toBe(403);
     current.studentEmails = [];
-    expect((await (await call('/learning')).json()).lessons).toEqual([]);
+    expect((await call('/learning')).status).toBe(403);
   });
   it('creates dated lessons, preserving resources when converting a legacy lesson', async () => {
     const response = await call('/lessons', 'POST', { ...draft, slotIds: [uuid(4)] });
@@ -553,13 +581,13 @@ describe('authenticated learning API', () => {
   it('protects the calendar and blocks edits that would silently change dated lessons', async () => {
     expect((await call('/admin/calendar', 'PUT', seed.calendar)).status).toBe(403);
     await call('/lessons', 'POST', draft);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/calendar', 'PUT', seed.calendar)).status).toBe(200);
     const calendar = { ...seed.calendar, holidays: [{ id: uuid(72), yearId: uuid(70), name: 'Closure', start: '2026-10-27', end: '2026-10-27' }] };
     expect((await call('/admin/calendar', 'PUT', calendar)).status).toBe(409);
   });
   it('requires explicit development configuration and confirmation for clearing lessons', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/schedules/reset', 'POST', { confirmation: 'CLEAR DEVELOPMENT LESSONS' })).status).toBe(403);
     config.ALLOW_SCHEDULE_RESET = true;
     expect((await call('/admin/schedules/reset', 'POST', { confirmation: 'yes' })).status).toBe(400);
@@ -574,7 +602,7 @@ describe('authenticated learning API', () => {
     const second = await (await call('/lessons', 'POST', { ...draft, name: 'Following week', schedule: { ...draft.schedule, startDate: '2026-11-03' } })).json();
     state.meetings = [{ occurrenceId: first.occurrences[0].id, lessonId: first.id, organizerUserId: 10, state: 'created', joinUrl: 'https://teams.microsoft.com/test' }];
     const original = structuredClone(state);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const week = { days: [0, 2, 3, 4], startsOn: 0 };
     for (const calendar of [
       { ...seed.calendar, years: seed.calendar!.years.map((year) => ({ ...year, week })) },
@@ -597,7 +625,7 @@ describe('authenticated learning API', () => {
     state.lessons = [];
     for (const day of [2, 3, 4]) state.slots.push({ ...state.slots[0], id: uuid(100 + day), day });
     expect((await call('/lessons', 'POST', { ...draft, schedule: { ...draft.schedule, frequency: 'daily', count: 8 } })).status).toBe(200);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const calendar = { ...seed.calendar, terms: seed.calendar!.terms.map((term) => ({ ...term, week: { days: [1, 2, 3, 4], startsOn: 0 } })) };
     const response = await call('/admin/calendar', 'PUT', calendar);
     expect(response.status).toBe(409);
@@ -609,7 +637,7 @@ describe('authenticated learning API', () => {
       terms: [...seed.calendar!.terms, { id: uuid(73), yearId: uuid(70), name: 'Term 2', start: '2027-01-03', end: '2027-03-26', week: DEFAULT_TEACHING_WEEK },
         { id: uuid(74), yearId: uuid(70), name: 'Term 3', start: '2027-04-04', end: '2027-06-25', week: DEFAULT_TEACHING_WEEK }] };
     expect((await call('/admin/calendar', 'PUT', calendar)).status).toBe(403);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const response = await call('/admin/calendar', 'PUT', calendar);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(calendar);
@@ -634,7 +662,7 @@ describe('authenticated learning API', () => {
     state.meetings = [{ occurrenceId: uuid(90), lessonId: uuid(6), organizerUserId: 10, state: 'pending', joinUrl: null }];
     expect((await call(`/lessons/${uuid(6)}`, 'DELETE')).status).toBe(409);
     expect((await call(`/lessons/${uuid(6)}`, 'PUT', draft)).status).toBe(409);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call(`/admin/classes/${uuid(1)}`, 'PUT', {
       name: 'Maths', yearGroup: '7', division: 'Secondary', teachers: [person(10)], students: [{ email: 'new@school.test', displayName: 'New' }],
     })).status).toBe(409);
@@ -657,18 +685,18 @@ describe('authenticated learning API', () => {
     expect(save).not.toHaveBeenCalled();
   });
   it('prevents reassignment of lessons to a different class even for admins', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call(`/lessons/${uuid(6)}`, 'PUT', { ...draft, classId: uuid(2) })).status).toBe(400);
   });
   it('protects day structure and validates referenced periods', async () => {
     expect((await call('/admin/structure', 'PUT', [])).status).toBe(403);
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/structure', 'PUT', [])).status).toBe(409);
     expect((await call('/admin/structure', 'PUT', seed.slots.map((s) => s.id === uuid(3) ? { ...s, kind: 'break' } : s))).status).toBe(409);
     expect((await call('/admin/structure', 'PUT', seed.slots)).status).toBe(200);
   });
   it.each(['Learn Admin', 'Full Admin'])('persists custom types and multi-day periods for %s and exposes them in timetables', async (role) => {
-    current = user(10, [role]);
+    current = user(10, ['Staff', role]);
     const type = { id: uuid(30), name: 'Registration', kind: 'lesson' };
     const added = [0, 1, 2, 3, 4].map((day) => ({
       id: uuid(40 + day), day, name: 'Registration', kind: 'lesson', typeId: type.id, start: '07:30', end: '07:45',
@@ -684,7 +712,7 @@ describe('authenticated learning API', () => {
     expect(timetable.slots).toEqual(structure.slots);
   });
   it('rejects invalid type changes, removal of in-use types and multi-day overlaps without saving', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/structure', 'PUT', { slots: seed.slots, periodTypes: [DEFAULT_PERIOD_TYPES[0]] })).status).toBe(400);
     const breaks = seed.slots.map((slot) => slot.kind === 'lesson' ? { ...slot, kind: 'break', typeId: 'lesson' } : slot);
     expect((await call('/admin/structure', 'PUT', {
@@ -700,7 +728,7 @@ describe('authenticated learning API', () => {
     { field: 'name', value: 'Renamed' }, { field: 'start', value: '08:05' },
     { field: 'end', value: '08:55' }, { field: 'day', value: 2 },
   ])('locks the $field of a period already used by a lesson', async ({ field, value }) => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const slots = seed.slots.map((slot) => slot.id === uuid(3) ? { ...slot, [field]: value } : slot);
     const response = await call('/admin/structure', 'PUT', { slots, periodTypes: DEFAULT_PERIOD_TYPES });
     expect(response.status).toBe(409);
@@ -708,14 +736,14 @@ describe('authenticated learning API', () => {
     expect(saveStructure).not.toHaveBeenCalled();
   });
   it('locks the type of used periods even when both types are schedulable', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const custom = { id: uuid(30), name: 'Registration', kind: 'lesson' };
     const slots = seed.slots.map((slot) => slot.id === uuid(3) ? { ...slot, typeId: custom.id } : slot);
     expect((await call('/admin/structure', 'PUT', { slots, periodTypes: [...DEFAULT_PERIOD_TYPES, custom] })).status).toBe(409);
     expect(saveStructure).not.toHaveBeenCalled();
   });
   it('saves pending period edits and new multi-day periods together, keeping used periods unchanged', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const slots = [
       ...seed.slots.filter((slot) => slot.id !== uuid(5)).map((slot) => slot.id === uuid(4) ? { ...slot, name: 'Edited period' } : slot),
       ...[0, 1, 2, 3, 4].map((day) => ({ id: uuid(80 + day), day, name: 'New period', kind: 'lesson', start: '10:00', end: '11:00' })),
@@ -730,7 +758,7 @@ describe('authenticated learning API', () => {
     const types = [...DEFAULT_PERIOD_TYPES, type];
     expect((await call('/admin/period-types', 'PUT', types)).status).toBe(403);
     expect(saveStructure).not.toHaveBeenCalled();
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     expect((await call('/admin/period-types', 'PUT', types)).status).toBe(200);
     expect(state.periodTypes).toEqual(types);
     expect(state.slots).toEqual(seed.slots);
@@ -820,7 +848,7 @@ describe('authenticated learning API', () => {
     expect(putFile).toHaveBeenCalledTimes(1);
   });
   it('rejects class CSV files over 2 MB before matching users', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const data = new FormData(); data.append('file', new Blob([new Uint8Array(2 * 1024 * 1024 + 1)]), 'oversized.csv');
     expect((await call('/admin/classes/preview', 'POST', data)).status).toBe(400);
     expect(findUsers).not.toHaveBeenCalled();
@@ -832,15 +860,15 @@ describe('authenticated learning API', () => {
     expect((await call(`/admin/classes/${uuid(1)}`, 'DELETE')).status).toBe(200);
   });
   it('revalidates CSV on import and never saves rows with an unmatched teacher', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const data = new FormData(); data.append('file', new Blob([CSV_HEADERS.join(',') + '\nMaths,Teacher,missing@school.test,Student,user20@school.test,7,Secondary']), 'classes.csv');
     const preview = await call('/admin/classes/preview', 'POST', data);
     expect((await preview.json()).errors[0].row).toBe(2);
     expect((await call('/admin/classes/import', 'POST', data)).status).toBe(400);
     expect(save).not.toHaveBeenCalled();
   });
-  it('previews without writes, then imports unknown students and immediately honours parent and student emails', async () => {
-    current = user(10, ['Learn Admin']);
+  it('imports pending students, denies Parent-only access and honours eligible student emails', async () => {
+    current = user(10, ['Staff', 'Learn Admin']);
     const data = new FormData(); data.append('file', new Blob([CSV_HEADERS.join(',') + '\nMaths,Teacher,user10@school.test,Pending Student,pending@school.test,7,Secondary']), 'classes.csv');
     const preview = await (await call('/admin/classes/preview', 'POST', data)).json();
     expect(preview.errors).toEqual([]);
@@ -850,23 +878,20 @@ describe('authenticated learning API', () => {
     const child = { email: 'pending@school.test', displayName: 'Pending Student' };
     expect(state.classes.find((c) => c.id === uuid(1))?.students).toEqual([child]);
     current = user(99, ['Parent'], [child.email]);
-    const parentData = await (await call('/learning')).json();
-    expect(parentData.children).toEqual([child]);
-    expect(parentData.classes).toHaveLength(1);
-    expect(parentData.lessons).toEqual(seed.lessons);
+    expect((await call('/learning')).status).toBe(403);
     current.studentEmails = [];
-    expect((await (await call('/learning')).json()).lessons).toEqual([]);
+    expect((await call('/learning')).status).toBe(403);
     current = { ...user(1234, ['Student']), email: child.email };
     const studentData = await (await call('/learning')).json();
     expect(studentData.classes[0].students).toEqual([child]);
     expect(studentData.lessons).toEqual(seed.lessons);
     expect((await call(`/lessons/${uuid(6)}/files/${uuid(7)}`)).status).toBe(200);
     current.roles = [];
-    expect((await (await call('/learning')).json()).classes).toEqual([]);
-    expect((await call(`/lessons/${uuid(6)}/files/${uuid(7)}`)).status).toBe(404);
+    expect((await call('/learning')).status).toBe(403);
+    expect((await call(`/lessons/${uuid(6)}/files/${uuid(7)}`)).status).toBe(403);
   });
   it('rejects membership changes that cause shared-email timetable clashes before saving', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     state.classes[0].students = [{ email: 'pending@school.test', displayName: 'Pending Student' }];
     state.lessons.push({ ...state.lessons[0], id: uuid(50), classId: uuid(2) });
     const before = structuredClone(state);
@@ -877,7 +902,7 @@ describe('authenticated learning API', () => {
     expect(state).toEqual(before);
   });
   it('rejects the whole class upload if any row is invalid, even alongside valid pending students', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const before = structuredClone(state);
     const data = new FormData(); data.append('file', new Blob([CSV_HEADERS.join(',') +
       '\nMaths,Teacher,user10@school.test,Pending Student,pending@school.test,7,Secondary' +
@@ -887,7 +912,7 @@ describe('authenticated learning API', () => {
     expect(state).toEqual(before);
   });
   it('checks current directory permissions again after a successful preview', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const data = new FormData(); data.append('file', new Blob([CSV_HEADERS.join(',') + '\nMaths,Teacher,user10@school.test,Student,pending@school.test,7,Secondary']), 'classes.csv');
     expect((await (await call('/admin/classes/preview', 'POST', data)).json()).errors).toEqual([]);
     vi.mocked(findUsers).mockResolvedValue([]);
@@ -895,7 +920,7 @@ describe('authenticated learning API', () => {
     expect(save).not.toHaveBeenCalled();
   });
   it('imports included class rosters, retaining existing class IDs and other classes', async () => {
-    current = user(10, ['Learn Admin']);
+    current = user(10, ['Staff', 'Learn Admin']);
     const data = new FormData(); data.append('file', new Blob([CSV_HEADERS.join(',') + '\nMaths,Teacher,user10@school.test,Student,user20@school.test,7,Secondary']), 'classes.csv');
     expect((await call('/admin/classes/import', 'POST', data)).status).toBe(200);
     expect(state.classes).toHaveLength(2);
