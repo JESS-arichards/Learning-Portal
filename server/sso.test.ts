@@ -18,11 +18,11 @@ import { errorHandler } from './errors.js';
 import { platform } from './platform.js';
 
 let server: Server, url: string;
-const student = { id: 20, displayName: 'Student', email: 'student@school.test', isActive: true, sessionVersion: 1, roles: ['Student'], department: 'Jumeirah Student', studentEmails: [] };
+const staff = { id: 20, displayName: 'Staff', email: 'staff@school.test', isActive: true, sessionVersion: 1, roles: ['Staff', 'Learn User'], department: 'English', studentEmails: [] };
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(platform).mockImplementation(async (path) => path === '/learning/sso/start'
-    ? { authorizationUrl: 'https://portal.school.test/api/auth/learning/authorize?request=opaque' } : student);
+    ? { authorizationUrl: 'https://portal.school.test/api/auth/learning/authorize?request=opaque' } : staff);
   const app = express();
   app.use(cookieParser());
   app.use('/api/auth', createSsoRouter());
@@ -93,10 +93,23 @@ describe('Learning centralized sign-in', () => {
   });
   it('refuses disabled central users and never issues a local session', async () => {
     const flow = await begin();
-    vi.mocked(platform).mockResolvedValueOnce({ ...student, isActive: false });
+    vi.mocked(platform).mockResolvedValueOnce({ ...staff, isActive: false });
     const response = await callback(flow.state, flow.cookie);
     expect(response.status).toBe(403);
     expect(response.headers.getSetCookie().some((c) => c.startsWith('learning_session='))).toBe(false);
+  });
+  it.each([
+    { roles: ['Staff'], department: null },
+    { roles: ['Learn User'], department: null },
+    { roles: ['Learn Admin'], department: null },
+    { roles: ['Student'], department: 'Primary Student' },
+    { roles: ['Student', 'Learn User'], department: 'Jumeirah Student' },
+  ])('does not issue browser sessions to ineligible $roles', async (changes) => {
+    const flow = await begin();
+    vi.mocked(platform).mockResolvedValueOnce({ ...staff, ...changes });
+    const response = await callback(flow.state, flow.cookie);
+    expect(response.status).toBe(403);
+    expect(response.headers.getSetCookie().some((value) => value.startsWith('learning_session='))).toBe(false);
   });
   it.each(['https://evil.test', '//evil.test', '/\\evil.test', '/\nevil.test', '/api/auth/start', '/login', '/%2e%2e/api/auth/start'])('does not restore unsafe return path %s', (path) => {
     expect(safeReturnPath(path)).toBe('/');
