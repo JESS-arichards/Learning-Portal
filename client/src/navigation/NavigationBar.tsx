@@ -17,6 +17,7 @@ export interface NavigationBarProps {
   navigation: ReactNode;
   mobileNavigation: ReactNode;
   desktopSidebar?: boolean;
+  desktopFullWidth?: boolean;
   actions?: ReactNode;
   mobileActions?: ReactNode;
   user?: NavigationUser;
@@ -69,7 +70,7 @@ function ApplicationInfo({ appName, user }: { appName: string; user?: Navigation
 export function NavigationBar({
   appName, brand, navigation, mobileNavigation, actions, mobileActions, user, avatar, support,
   profileUrl, adminUrl, accountItems, parkingReleaseUrl, parkingBay, signOut,
-  desktopSidebar = false, application,
+  desktopSidebar = false, desktopFullWidth = false, application,
 }: NavigationBarProps) {
   const location = useLocation();
   const title = application ? navigationTitle(application, location.pathname) : appName;
@@ -178,7 +179,7 @@ export function NavigationBar({
   );
 
   return (
-    <header className={`jess-navigation${scrolled || mobileOpen ? ' is-scrolled' : ''}${desktopSidebar ? ' jess-navigation--sidebar' : ''}${desktopSidebar && sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>
+    <header className={`jess-navigation${scrolled || mobileOpen ? ' is-scrolled' : ''}${desktopSidebar ? ' jess-navigation--sidebar' : ''}${desktopSidebar && sidebarCollapsed ? ' is-sidebar-collapsed' : ''}${desktopFullWidth ? ' jess-navigation--full-width' : ''}`}>
       <nav className="jess-nav-bar" aria-label="Main">
         <Link to="/" className="jess-nav-brand" aria-label={`${title} home`} title={title} onClick={() => { setMobileOpen(false); setMenuOpen(false); }}>
           {brand}<span>{title}</span>

@@ -84,7 +84,9 @@ export function App() {
   const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} />;
   return <BrowserRouter>
     <div className="fluid-bg" aria-hidden="true"><div className="orb orb-1" /><div className="orb orb-2" /><div className="orb orb-3" /></div>
-    <NavigationBar appName={config.branding.appName} application="learn" brand={config.branding.logoUrl ? <img src={config.branding.logoUrl} alt={config.branding.organisationName} /> : <BookOpen size={26} />} desktopSidebar navigation={links} mobileNavigation={<ul className="jess-nav-portal-links">{links}</ul>}
+    <NavigationBar appName={config.branding.appName} application="learn" brand={config.branding.logoUrl ? <img src={config.branding.logoUrl} alt={config.branding.organisationName} /> : <BookOpen size={26} />} desktopFullWidth
+      navigation={<PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} desktop roles={user.roles} />}
+      mobileNavigation={<ul className="jess-nav-portal-links">{links}</ul>}
       user={user} avatar={<Avatar user={user} />} profileUrl={config.profileUrl} adminUrl={navigation.adminUrl ?? undefined} signOut={logout}
       support={<SupportInfoButton session={{ user, provider: 'central' }} />}
       parkingReleaseUrl={navigation.parkingReleaseUrl} parkingBay={navigation.parkingBay} />

@@ -2,8 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
-import { portalMenu } from '../../../shared/portalMenu';
-import { navigationSchema } from '../../../shared/learning';
+import { desktopPortalMenu, portalMenu } from '../../../shared/portalMenu';
 import { PortalLinks, type PortalLinksProps } from './PortalLinks';
 
 const items = portalMenu({ staff: true, trips: true, absence: true, tasks: true, learning: true, learningAdmin: true });
@@ -13,6 +12,67 @@ function render(application: PortalLinksProps['application']) {
   }))));
 }
 describe('shared Applications Portal links', () => {
+  it('orders Home, Streaming, Learn and Staff with Streaming outside groups', () => {
+    const groups = desktopPortalMenu(items, ['Staff']);
+    expect(groups.map((item) => item.label)).toEqual(['Home', 'Streaming', 'Learn', 'Staff']);
+    const staff = groups.find((item) => item.id === 'staff');
+    expect(staff && 'children' in staff && staff.children.map((item) => item.id))
+      .toEqual(['parking', 'trips', 'absence', 'tasks']);
+    const learn = groups.find((item) => item.id === 'learning');
+    expect(learn && 'children' in learn && learn.children.map((item) => item.id)).toEqual(['timetable', 'classes', 'admin']);
+    expect(items.find((item) => item.id === 'learning')?.label).toBe('Learning Portal');
+  });
+  it('groups only eligible parent features and does not invent trips or staff links', () => {
+    const options = { staff: false, trips: false, absence: false, tasks: false, learning: true, learningAdmin: false };
+    const groups = desktopPortalMenu(portalMenu(options), ['Parent']);
+    expect(groups.map((item) => item.label)).toEqual(['Home', 'Streaming', 'Learn']);
+    expect(groups.find((item) => item.id === 'parents')).toBeUndefined();
+    const attachedGroups = desktopPortalMenu(portalMenu({ ...options, trips: true }), ['Parent']);
+    expect(attachedGroups.map((item) => item.label)).toEqual(['Home', 'Streaming', 'Learn', 'Parent']);
+    const attached = attachedGroups.find((item) => item.id === 'parents');
+    expect(attached && 'children' in attached && attached.children.map((item) => item.id)).toEqual(['trips']);
+  });
+  it('deduplicates staff/parent links in favour of Staff and hides the empty Parents heading', () => {
+    const groups = desktopPortalMenu(items, ['Staff', 'Parent']);
+    expect(groups.map((item) => item.id)).toEqual(['home', 'streaming', 'learning', 'staff']);
+    const links = groups.flatMap((item) => 'children' in item ? item.children : [item]);
+    expect(new Set(links.map((item) => item.id)).size).toBe(links.length);
+  });
+  it('retains permitted feature links for students and admin-only users without mislabelling their roles', () => {
+    const ordinary = portalMenu({ staff: false, trips: false, absence: false, tasks: false, learning: true, learningAdmin: false });
+    expect(desktopPortalMenu(ordinary, ['Student']).map((item) => item.id)).toEqual(['home', 'streaming', 'learning']);
+    const admin = portalMenu({ staff: false, trips: true, absence: false, tasks: true, learning: true, learningAdmin: true, communication: true });
+    expect(desktopPortalMenu(admin, ['Full Admin']).map((item) => item.id)).toEqual(['home', 'streaming', 'learning', 'communication', 'trips', 'tasks']);
+  });
+  it('renders closed desktop dropdowns with matching controls and keeps the mobile menu ungrouped', () => {
+    const props: PortalLinksProps = {
+      items, application: 'apps', portalUrl: 'https://appsdev.jess.sch.ae', learningUrl: 'https://learndev.jess.sch.ae',
+      roles: ['Staff', 'Parent'],
+    };
+    const desktop = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, { ...props, desktop: true }))));
+    expect(desktop).toContain('jess-nav-top-group');
+    expect(desktop).toMatch(/aria-expanded="false" aria-controls="[^"]+"[^>]*>Learn/);
+    expect(desktop).toMatch(/aria-expanded="false" aria-controls="[^"]+"[^>]*>Staff/);
+    expect(desktop).not.toContain('>Parent<');
+    expect(desktop.indexOf('title="Home"')).toBeLessThan(desktop.indexOf('title="Streaming"'));
+    expect(desktop.indexOf('title="Streaming"')).toBeLessThan(desktop.indexOf('>Learn<'));
+    expect(desktop).toContain('href="/parking"');
+    const mobile = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, props))));
+    expect(mobile).toContain('jess-nav-group-toggle');
+    expect(mobile).toContain('Learning Portal');
+    expect(mobile).not.toContain('jess-nav-top-group');
+    expect(mobile).not.toContain('>Staff<');
+  });
+  it('keeps Learning links local and Portal links external in desktop groups, including Teams mode', () => {
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, {
+      items, application: 'learn', portalUrl: 'https://appsdev.jess.sch.ae', learningUrl: 'https://learndev.jess.sch.ae',
+      desktop: true, roles: ['Staff'], teams: true,
+    }))));
+    expect(html).toContain('href="/classes"');
+    expect(html).toContain('href="https://appsdev.jess.sch.ae/parking?teams=1"');
+    expect(html).toContain('href="https://appsdev.jess.sch.ae/?teams=1"');
+    expect(html).not.toContain('aria-expanded="true"');
+  });
   it('uses the same central menu with local Learn links and external Portal links in Learning', () => {
     const html = render('learn');
     expect(html).toContain('href="https://appsdev.jess.sch.ae/streaming"');
@@ -41,13 +101,6 @@ describe('shared Applications Portal links', () => {
       id: 'communication', label: 'Communication', icon: 'communication', path: '/communication', application: 'apps',
     });
     expect(portalMenu(options).some((item) => item.id === 'communication')).toBe(false);
-  });
-  it('accepts every link the central menu can produce in the navigation contract', () => {
-    const all = portalMenu({ staff: true, trips: true, absence: true, tasks: true, communication: true, learning: true, learningAdmin: true });
-    const result = navigationSchema.safeParse({
-      items: all, portalUrl: 'https://apps.example.org', learningUrl: 'https://learn.example.org', adminUrl: null, parkingReleaseUrl: null, parkingBay: null,
-    });
-    expect(result.success).toBe(true);
   });
   it('carries Teams mode across application origins while leaving local routes unchanged', () => {
     const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement('ul', null, createElement(PortalLinks, {

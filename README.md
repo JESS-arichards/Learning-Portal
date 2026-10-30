@@ -1,5 +1,15 @@
 # Learning Portal
 
+Above 1400px, shared navigation uses a full-width top bar rather than a sidebar.
+The order is Home, Streaming, Learn, Staff, Parent, with Home and Streaming as
+standalone links. Other permitted links are grouped under Staff or Parent
+according to the user's roles. Shared staff/parent links appear only in
+Staff and empty groups are hidden. Students and admin-only users retain their
+permitted feature links directly. The information, avatar and three-dot controls
+are unchanged, as is the original mobile/tablet hamburger menu at 1400px and below.
+The central API still determines link eligibility; desktop grouping does not grant
+additional access.
+
 My timetable highlights the current school period with a #FF8200 outline and a
 "Now" label, including breaks and periods without lessons. School time uses
 Asia/Dubai regardless of the viewer's device timezone. The highlight updates
