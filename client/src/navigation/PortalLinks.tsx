@@ -81,17 +81,18 @@ function MenuLink({ item, application, portalUrl, learningUrl, teams }: PortalLi
   return <a href={target.toString()} title={item.label} className="nav-link">{content}</a>;
 }
 function MenuGroup({ item, ...props }: PortalLinksProps & { item: PortalMenuItem & { children: PortalLink[] } }) {
-  const [open, setOpen] = useState(props.application === 'learn');
+  const [open, setOpen] = useState(props.application === 'learn' && item.id === 'learning');
+  const id = useId();
   const Icon = icons[item.icon];
   return <div className="jess-nav-group">
-    <button className="nav-link jess-nav-group-toggle" type="button" title={item.label} aria-expanded={open} onClick={() => setOpen(!open)}>
+    <button className="nav-link jess-nav-group-toggle" type="button" title={item.label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
       <Icon size={18} /><span className="jess-nav-link-label">{item.label}</span><ChevronDown size={16} className="jess-nav-group-chevron" />
     </button>
-    <ul className="jess-nav-group-items" hidden={!open}>{item.children.map((child) => <li key={child.id}><MenuLink {...props} item={child} /></li>)}</ul>
+    <ul id={id} className="jess-nav-group-items" hidden={!open}>{item.children.map((child) => <li key={child.id}><MenuLink {...props} item={child} /></li>)}</ul>
   </div>;
 }
 export function PortalLinks(props: PortalLinksProps) {
-  const items = props.desktop ? desktopPortalMenu(props.items, props.roles ?? []) : props.items;
+  const items = props.desktop || props.roles ? desktopPortalMenu(props.items, props.roles ?? []) : props.items;
   return <>{items.map((item) => <li key={item.id}>
     {'children' in item ? props.desktop ? <DesktopMenuGroup {...props} item={item} /> : <MenuGroup {...props} item={item} /> : <MenuLink {...props} item={item} />}
   </li>)}</>;

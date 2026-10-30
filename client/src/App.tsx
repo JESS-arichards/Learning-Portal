@@ -83,7 +83,7 @@ export function App() {
   if (!user) return <main className="loading-screen"><p role="alert">{error || 'Please sign in again.'}</p><button className="btn primary" onClick={usesTeamsSession() ? () => void bootstrap() : redirectToSignIn}>Continue to sign in</button></main>;
   if (!canUseLearning(user)) return <main className="loading-screen"><p role="alert">You do not have access to the Learning Portal.</p></main>;
   const manager = user.roles.includes('Staff') || isAdmin(user) || data?.classes.some((c) => canManage(user, c));
-  const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} />;
+  const links = <PortalLinks items={navigation.items} application="learn" portalUrl={navigation.portalUrl} learningUrl={navigation.learningUrl} teams={usesTeamsSession()} roles={user.roles} />;
   return <BrowserRouter>
     <div className="fluid-bg" aria-hidden="true"><div className="orb orb-1" /><div className="orb orb-2" /><div className="orb orb-3" /></div>
     <NavigationBar appName={config.branding.appName} application="learn" brand={config.branding.logoUrl ? <img src={config.branding.logoUrl} alt={config.branding.organisationName} /> : <BookOpen size={26} />} desktopFullWidth
