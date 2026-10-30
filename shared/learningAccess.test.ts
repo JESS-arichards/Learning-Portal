@@ -3,11 +3,15 @@ import { canUseLearning } from './learningAccess.js';
 
 describe('Learning feature eligibility', () => {
   it.each([
-    { roles: ['Staff'], department: null, allowed: true },
+    { roles: ['Staff'], department: null, allowed: false },
+    { roles: ['Staff', 'Learn User'], department: null, allowed: true },
     { roles: ['Full Admin'], department: null, allowed: true },
-    { roles: ['Student'], department: 'Jumeirah Student', allowed: true },
-    { roles: ['Student'], department: 'Primary Student', allowed: true },
-    { roles: ['Student'], department: ' PRIMARY STUDENT ', allowed: true },
+    { roles: ['Student'], department: 'Jumeirah Student', allowed: false },
+    { roles: ['Student'], department: 'Primary Student', allowed: false },
+    { roles: ['Student'], department: ' PRIMARY STUDENT ', allowed: false },
+    { roles: ['Student', 'Learn User'], department: 'Primary Student', allowed: false },
+    { roles: ['Student', 'Learn Admin'], department: 'Jumeirah Student', allowed: false },
+    { roles: ['Parent', 'Learn User'], department: null, allowed: false },
     { roles: ['Student'], department: 'Secondary Student', allowed: false },
     { roles: ['Student'], department: 'Primary Student Extra', allowed: false },
     { roles: ['Student'], department: null, allowed: false },

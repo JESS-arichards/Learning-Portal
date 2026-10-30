@@ -54,6 +54,9 @@ describe('cookie-free Learning sessions in Teams', () => {
     { roles: ['Learn User'], department: null },
     { roles: ['Student'], department: 'Secondary Student' },
     { roles: ['Student'], department: null },
+    { roles: ['Student'], department: 'Primary Student' },
+    { roles: ['Student', 'Learn User'], department: 'Jumeirah Student' },
+    { roles: ['Staff'], department: null },
   ])('denies session issuance and revokes existing browser/Teams access for ineligible $roles / $department', async (changes) => {
     const token = await login();
     const browser = await fetch(`${url}/browser-login`);
@@ -64,13 +67,15 @@ describe('cookie-free Learning sessions in Teams', () => {
     mocks.platform.mockResolvedValue({ ...user, ...changes });
     expect((await post('redeem', { code: 'c'.repeat(43), codeVerifier: 'v'.repeat(43) })).status).toBe(403);
   });
-  it.each(['Jumeirah Student', 'Primary Student'])('rechecks student department %s on every request', async (department) => {
-    const student = { ...user, roles: ['Student'], department };
-    mocks.platform.mockResolvedValue(student);
-    mocks.getUser.mockResolvedValue(student);
+  it.each(['Learn User', 'Learn Admin'])('rechecks Staff and %s on every request', async (role) => {
+    const staff = { ...user, roles: ['Staff', role] };
+    mocks.platform.mockResolvedValue(staff);
+    mocks.getUser.mockResolvedValue(staff);
     const token = await login();
     expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200);
-    mocks.getUser.mockResolvedValue({ ...student, department: 'Secondary Student' });
+    mocks.getUser.mockResolvedValue({ ...staff, roles: ['Staff'] });
+    expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(403);
+    mocks.getUser.mockResolvedValue({ ...staff, roles: [role] });
     expect((await fetch(`${url}/me`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(403);
   });
   it('starts the existing PKCE flow with a fixed Teams callback and no transaction cookie', async () => {

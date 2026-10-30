@@ -61,15 +61,15 @@ use a **private Azure Blob Storage container**.
 ## What is included
 
 - Eligible users sign in **on Applications Portal**, not in Learning. Learn admits
-  **Staff**, **Students** whose department is exactly **Jumeirah Student** or
-  **Primary Student**, and **Full Admin**. Department matching ignores case and
-  surrounding spaces. Learn Admin and legacy Learn User alone do not grant entry;
-  parents without another eligible role cannot enter, even with linked children.
-  Staff/students use the Portal's Microsoft Entra sign-in.
+  **Staff** with **Learn User** or **Learn Admin**, and **Full Admin** even without
+  Staff. Staff alone, Learn User/Learn Admin without Staff, students of any
+  department and parents without another eligible role cannot enter.
+  Staff use the Portal's Microsoft Entra sign-in. Eligibility is rechecked on
+  every authenticated request, including existing browser and Teams sessions.
   Learning redirects unauthenticated visitors there and restores the requested Learning
   page after successful sign-in. An existing Portal session skips the login form.
   Independent Learning cookies never share Portal session tokens.
-- Students land on their dated timetable, including breaks, lesson descriptions,
+- Eligible users land on their dated timetable, including breaks, lesson descriptions,
   downloadable files, external resources and Microsoft Teams links.
 - Existing linked-child visibility rules remain for accounts that also meet Learn
   eligibility; a parent relationship is not a feature-access grant.
